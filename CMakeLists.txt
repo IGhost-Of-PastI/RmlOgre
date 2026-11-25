@@ -2,8 +2,8 @@
 
 project(RmlOgre VERSION 0.1 LANGUAGES CXX)
 
-option(BUILD_EXAMPLE "Build example executable" TRUE)
-
+option(BUILD_EXAMPLE "Build example executable" OFF)
+option(BUILD_TESTS "Build tests executables" OFF)
 
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
@@ -74,35 +74,9 @@ set_target_properties(RmlOgre
 	PROPERTIES PUBLIC_HEADER "${PUBLIC_HEADERS}"
 )
 
-configure_package_config_file(
-	cmake/RmlOgreConfig.cmake.in
-	${CMAKE_CURRENT_BINARY_DIR}/RmlOgreConfig.cmake
-	INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/RmlOgre
-)
-write_basic_package_version_file(
-	${CMAKE_CURRENT_BINARY_DIR}/RmlOgreConfigVersion.cmake
-	COMPATIBILITY SameMajorVersion
-)
-
-install(
-	TARGETS RmlOgre
-	EXPORT RmlOgreTargets
-	PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/RmlOgre
-)
-install(
-	EXPORT RmlOgreTargets
-	FILE RmlOgreTargets.cmake
-	NAMESPACE RmlOgre::
-	DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/RmlOgre
-)
-install(
-	FILES
-		${CMAKE_CURRENT_BINARY_DIR}/RmlOgreConfig.cmake
-		${CMAKE_CURRENT_BINARY_DIR}/RmlOgreConfigVersion.cmake
-	DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/RmlOgre
-)
-
 if(BUILD_EXAMPLE)
 	add_subdirectory("example")
 endif()
-
+if(BUILD_TESTS)
+	add_subdirectory("tests")
+endif()
