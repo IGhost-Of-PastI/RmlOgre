@@ -9,7 +9,7 @@ include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 #list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-#find_package(OGRE-Next REQUIRED)
+find_package(ogre-next CONFIG REQUIRED)
 find_package(RmlUi REQUIRED)
 
 
@@ -58,8 +58,8 @@ target_sources(RmlOgre
 )
 
 target_link_libraries(RmlOgre
-	${OGRE_LIBRARIES}
-	${OGRE_HlmsUnlit_LIBRARIES}
+	OGRE::OgreNextMain
+	OGRE::OgreNextHlmsUnlit
 
 	RmlUi::RmlUi
 )

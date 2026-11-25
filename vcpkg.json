@@ -1,5 +1,8 @@
 {
   "dependencies": [
+    "boost-nowide",
+    "boost-process",
+    "boost-test",
     {
       "name": "ogre-next3",
       "features": [
@@ -14,6 +17,8 @@
         "lua",
         "svg"
       ]
-    }
+    },
+    "vulkan",
+    "vulkan-validationlayers"
   ]
 }

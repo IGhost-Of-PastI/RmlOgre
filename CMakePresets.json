@@ -9,6 +9,7 @@
         "installDir": "${sourceDir}/out/install/${presetName}",
         "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "cacheVariables": {
+          "BUILD_EXAMPLE": "ON",
           "VCPKG_OVERLAY_PORTS": "$env{DP_OVERLAY_PORTS}",
           "CMAKE_C_COMPILER": "cl.exe",
           "CMAKE_CXX_COMPILER": "cl.exe"
