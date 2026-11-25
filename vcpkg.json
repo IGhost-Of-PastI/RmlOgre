@@ -1,0 +1,19 @@
+{
+  "dependencies": [
+    {
+      "name": "ogre-next3",
+      "features": [
+        "vulkan"
+      ]
+    },
+    {
+      "name": "rmlui",
+      "features": [
+        "freetype",
+        "lottie",
+        "lua",
+        "svg"
+      ]
+    }
+  ]
+}

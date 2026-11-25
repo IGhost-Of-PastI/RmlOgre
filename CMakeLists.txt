@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+﻿cmake_minimum_required(VERSION 3.10)
 
 project(RmlOgre VERSION 0.1 LANGUAGES CXX)
 
@@ -7,9 +7,9 @@ option(BUILD_EXAMPLE "Build example executable" TRUE)
 
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+#list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-find_package(OGRE-Next REQUIRED)
+#find_package(OGRE-Next REQUIRED)
 find_package(RmlUi REQUIRED)
 
 
