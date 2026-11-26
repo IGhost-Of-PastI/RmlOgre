@@ -1,4 +1,4 @@
-// tests/src/OgreRmlTestFixture.hpp
+﻿// tests/src/OgreRmlTestFixture.hpp
 #pragma once
 
 #include "ImageCompare.hpp"
@@ -35,7 +35,9 @@ namespace rml_tests {
 		std::string         rml_filename;
 		std::string         reference_filename;
 		ImageCompareOptions compare_options{};
-		std::uint32_t       warmup_frames = 2;
+		std::uint32_t       warmup_frames = 1u;
+		std::uint32_t       worker_threads = 1u;
+		bool                include_scene_pass = false;
 	};
 
 	class OgreRmlTestFixture {

@@ -1,4 +1,4 @@
-// CompositorPassRml.cpp
+﻿// CompositorPassRml.cpp
 #include "CompositorPassRml.hpp"
 #include "CompositorPassRmlDef.hpp"
 #include "../geometry.hpp"
@@ -34,6 +34,41 @@
 using namespace nimble::RmlOgre;
 
 namespace {
+
+	struct SharedUiSceneManager {
+		Ogre::SceneManager* sceneManager = nullptr;
+		std::size_t         refCount = 0;
+
+		static SharedUiSceneManager& instance() noexcept {
+			static SharedUiSceneManager state{};
+			return state;
+		}
+
+		Ogre::SceneManager* acquire() {
+			if (!sceneManager) {
+				auto& root = Ogre::Root::getSingleton();
+				sceneManager = root.createSceneManager(
+					Ogre::ST_GENERIC, 1u, "RmlOgre_UiSceneManager");
+				sceneManager->getRenderQueue()->setSortRenderQueue(
+					RenderObject::RENDER_QUEUE_ID,
+					Ogre::RenderQueue::RqSortMode::DisableSort);
+			}
+			++refCount;
+			return sceneManager;
+		}
+
+		void release() {
+			if (refCount == 0)
+				return;
+			--refCount;
+			if (refCount == 0 && sceneManager) {
+				if (auto* root = Ogre::Root::getSingletonPtr()) {
+					root->destroySceneManager(sceneManager);
+				}
+				sceneManager = nullptr;
+			}
+		}
+	};
 
 	Ogre::StencilParams make_stencil_params(StencilMode mode) noexcept {
 		Ogre::StencilParams params{};
@@ -129,29 +164,21 @@ namespace {
 
 CompositorPassRml::CompositorPassRml(
 	const CompositorPassRmlDef* definition,
-	Ogre::Camera* defaultCamera,
+	Ogre::Camera* /*defaultCamera*/,
 	const Ogre::RenderTargetViewDef* rtv,
 	Ogre::CompositorNode* parentNode)
 	: Ogre::CompositorPass(definition, parentNode)
 	, mDefinition(definition)
 	, mFrameData(definition ? definition->mFrameData : nullptr)
-	, mSceneManager(defaultCamera->getSceneManager())
+	, mUiSceneManager(SharedUiSceneManager::instance().acquire())
 {
 	initialize(rtv);
 	mNumStaticTextureDeps = mTextureDependencies.size();
 
 	const std::string camName = "RmlOrthoCam_" + std::to_string(reinterpret_cast<std::uintptr_t>(this));
-	mOrthoCamera = mSceneManager->createCamera(camName, false);
+	mOrthoCamera = mUiSceneManager->createCamera(camName, false);
 	mFsRect = parentNode->getWorkspace()->getCompositorManager()->getSharedFullscreenTriangle();
-
-	auto& root = Ogre::Root::getSingleton();
-	mRenderQueue = std::make_unique<Ogre::RenderQueue>(
-		root.getHlmsManager(),
-		mSceneManager,
-		root.getRenderSystem()->getVaoManager());
-	mRenderQueue->setSortRenderQueue(
-		RenderObject::RENDER_QUEUE_ID,
-		Ogre::RenderQueue::RqSortMode::DisableSort);
+	mRenderQueue = mUiSceneManager->getRenderQueue();
 
 	mFullscreenVao = create_fullscreen_triangle_vao();
 	initQuadMaterials();
@@ -160,7 +187,7 @@ CompositorPassRml::CompositorPassRml(
 CompositorPassRml::~CompositorPassRml() {
 	mRenderObjects.clear();
 	mSceneNodes.clear();
-	mRenderQueue.reset();
+	mRenderQueue = nullptr;
 
 	auto* rs = mParentNode ? mParentNode->getRenderSystem() : nullptr;
 
@@ -182,9 +209,13 @@ CompositorPassRml::~CompositorPassRml() {
 	destroy_vao(mFullscreenVao);
 	mFullscreenVao = nullptr;
 
-	if (mSceneManager && mOrthoCamera) {
-		mSceneManager->destroyCamera(mOrthoCamera);
-		mOrthoCamera = nullptr;
+	if (mUiSceneManager) {
+		if (mOrthoCamera) {
+			mUiSceneManager->destroyCamera(mOrthoCamera);
+			mOrthoCamera = nullptr;
+		}
+		SharedUiSceneManager::instance().release();
+		mUiSceneManager = nullptr;
 	}
 }
 
@@ -569,7 +600,7 @@ void CompositorPassRml::drawFullscreenQuad(
 
 	mFsRect->setMaterial(mat);
 	rs->executeRenderPassDescriptorDelayedActions();
-	mSceneManager->_renderSingleObject(mFsRect, mFsRect, false, false);
+	mUiSceneManager->_renderSingleObject(mFsRect, mFsRect, false, false);
 }
 
 void CompositorPassRml::drawScratchQuad(
@@ -838,7 +869,7 @@ void CompositorPassRml::execute(const Ogre::Camera* /*lodCamera*/) {
 
 	notifyPassPreExecuteListeners();
 
-	auto* rs = mSceneManager->getDestinationRenderSystem();
+	auto* rs = mParentNode->getRenderSystem();
 
 	if (mFrameData && !mFrameData->commands.empty()) {
 		const float w = static_cast<float>(mAnyTargetTexture->getWidth());
@@ -851,8 +882,8 @@ void CompositorPassRml::execute(const Ogre::Camera* /*lodCamera*/) {
 			0.0f,      0.0f,     0.0f,  1.0f
 		};
 
-		mSceneManager->_setCamerasInProgress(Ogre::CamerasInProgress(mOrthoCamera));
-		mSceneManager->_setCurrentCompositorPass(this);
+		mUiSceneManager->_setCamerasInProgress(Ogre::CamerasInProgress(mOrthoCamera));
+		mUiSceneManager->_setCurrentCompositorPass(this);
 
 		const auto& cmds = mFrameData->commands;
 		std::size_t idx = 0;
@@ -939,7 +970,7 @@ void CompositorPassRml::execute(const Ogre::Camera* /*lodCamera*/) {
 
 		if (rs->getCurrentPassDescriptor())
 			rs->setStencilBufferParams(0u, Ogre::StencilParams{});
-		mSceneManager->_setCurrentCompositorPass(nullptr);
+		mUiSceneManager->_setCurrentCompositorPass(nullptr);
 	}
 	else {
 		setRenderPassDescToCurrent();

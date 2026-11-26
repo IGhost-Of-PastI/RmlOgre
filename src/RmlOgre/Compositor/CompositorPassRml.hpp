@@ -1,4 +1,4 @@
-// CompositorPassRml.hpp
+﻿// CompositorPassRml.hpp
 #pragma once
 
 #include "../RenderObject.hpp"
@@ -249,7 +249,7 @@ namespace nimble::RmlOgre {
 		const CompositorPassRmlDef* mDefinition = nullptr;
 		const RmlFrameData* mFrameData = nullptr;
 
-		Ogre::SceneManager* mSceneManager = nullptr;
+		Ogre::SceneManager* mUiSceneManager = nullptr; ///< Общий 1-поточный SceneManager (не зависит от потоков 3D-сцены).
 		Ogre::Camera* mOrthoCamera = nullptr;
 		Ogre::v1::Rectangle2D* mFsRect = nullptr;
 
@@ -263,7 +263,7 @@ namespace nimble::RmlOgre {
 		std::vector<Ogre::SceneNode> mSceneNodes;
 		std::vector<RenderObject, Ogre::STLAllocator<RenderObject, Ogre::AlignAllocPolicy<>>> mRenderObjects;
 
-		std::unique_ptr<Ogre::RenderQueue> mRenderQueue;
+		Ogre::RenderQueue* mRenderQueue = nullptr; ///< Родная RenderQueue из mUiSceneManager (numWorkerThreads == 1).
 		Ogre::VertexArrayObject* mFullscreenVao = nullptr;
 
 		// Пул слоёв и scratch-буферов (выделяются лениво при первой offscreen-команде)

@@ -1,4 +1,4 @@
-// tests/src/OgreRmlTestFixture.cpp
+﻿// tests/src/OgreRmlTestFixture.cpp
 #include "OgreRmlTestFixture.hpp"
 
 #include <OgreAbiUtils.h>
@@ -19,6 +19,7 @@
 #include <Compositor/OgreCompositorWorkspaceDef.h>
 #include <Compositor/Pass/OgreCompositorPassProvider.h>
 #include <Compositor/Pass/PassClear/OgreCompositorPassClearDef.h>
+#include <Compositor/Pass/PassScene/OgreCompositorPassSceneDef.h>
 
 #if RML_TEST_STATIC_OGRE
 #	include <RenderSystems/Vulkan/OgreVulkanPlugin.h>
@@ -259,7 +260,8 @@ namespace rml_tests {
 				Ogre::SceneManager* sm,
 				Ogre::TextureGpu* rtTexture,
 				const nimble::RmlOgre::RmlFrameData* frameData,
-				const std::string& prefix)
+				const std::string& prefix,
+				bool includeScenePass = false)
 				: compMgr(cm)
 				, sceneMgr(sm)
 			{
@@ -291,12 +293,16 @@ namespace rml_tests {
 
 				nodeDef->setNumTargetPass(1);
 				auto* targetPass = nodeDef->addTargetPass("rtv_rml");
-				targetPass->setNumPasses(2);
+				targetPass->setNumPasses(includeScenePass ? 3u : 2u);
 
 				auto* clearPass = static_cast<Ogre::CompositorPassClearDef*>(
 					targetPass->addPass(Ogre::PASS_CLEAR));
 				clearPass->mClearColour[0] = Ogre::ColourValue(0.0f, 0.0f, 0.0f, 1.0f);
 				clearPass->mClearStencil = 0u;
+
+				if (includeScenePass) {
+					targetPass->addPass(Ogre::PASS_SCENE);
+				}
 
 				auto* rmlPass = static_cast<nimble::RmlOgre::CompositorPassRmlDef*>(
 					targetPass->addPass(Ogre::PASS_CUSTOM, Ogre::IdString("rml/render")));
@@ -447,12 +453,32 @@ namespace rml_tests {
 
 		ImageCompareResult result{};
 		try {
+			Ogre::SceneManager* customSceneMgr = nullptr;
+			Ogre::SceneManager* activeSceneMgr = _scene_mgr;
+			if (spec.worker_threads > 1u) {
+				customSceneMgr = _root->createSceneManager(
+					Ogre::ST_GENERIC,
+					spec.worker_threads,
+					"RmlTestMtSceneMgr_" + spec.name);
+				activeSceneMgr = customSceneMgr;
+			}
+
+			struct ScopedSceneMgrDestroy {
+				Ogre::Root* root;
+				Ogre::SceneManager* sm;
+				~ScopedSceneMgrDestroy() {
+					if (root && sm)
+						root->destroySceneManager(sm);
+				}
+			} customSmGuard{ _root.get(), customSceneMgr };
+
 			ScopedRmlTestWorkspace testWs(
 				_root->getCompositorManager2(),
-				_scene_mgr,
+				activeSceneMgr,
 				rtTexture,
 				&_render_interface->frameData(),
-				"RmlTest_" + spec.name);
+				"RmlTest_" + spec.name,
+				spec.include_scene_pass);
 
 			ScopedCurrentPath cwdGuard(rmlDir);
 

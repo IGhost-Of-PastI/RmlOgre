@@ -1,4 +1,4 @@
-// tests/src/RenderTests.cpp
+﻿// tests/src/RenderTests.cpp
 #define BOOST_TEST_MODULE RmlOgreRenderTests
 
 #include <boost/test/unit_test.hpp>
@@ -116,6 +116,18 @@ BOOST_AUTO_TEST_CASE(test_10_shaders) {
 		.rml_filename = "render_test_10_shaders.rml",
 		.reference_filename = "render_test_10_shaders.png",
 		.compare_options = {.channel_tolerance = 5, .max_diff_ratio = 0.01, .max_rmse = 5.0 }
+		});
+}
+
+BOOST_AUTO_TEST_CASE(test_11_multithreaded_scene_manager) {
+	check_render_test(RenderTestSpec{
+		.name = "render_test_11_multithreaded_sm",
+		.rml_filename = "render_test_07_filters.rml",
+		.reference_filename = "render_test_07_filters.png",
+		.compare_options = { .channel_tolerance = 6, .max_diff_ratio = 0.03, .max_rmse = 2.5 },
+		.warmup_frames = 2u,
+		.worker_threads = 2u,
+		.include_scene_pass = true
 		});
 }
 
