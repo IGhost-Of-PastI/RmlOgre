@@ -1,80 +1,130 @@
-﻿cmake_minimum_required(VERSION 3.10)
-
-project(RmlOgre VERSION 0.1 LANGUAGES CXX)
+﻿cmake_minimum_required(VERSION 3.25)
+project(RmlOgre VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF) # Использовать чистый стандарт (-std=c++20 вместо -std=gnu++20)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(BUILD_EXAMPLE "Build example executable" OFF)
-option(BUILD_TESTS "Build tests executables" OFF)
-
-include(CMakePackageConfigHelpers)
-include(GNUInstallDirs)
-#list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+option(RMLOGRE_BUILD_TESTS "Build RmlOgre render tests" OFF)
+option(RMLOGRE_BUILD_EXAMPLE "Build RmlOgre example executable" OFF)
+option(RMLOGRE_INSTALL_MEDIA "Install RmlOgre shaders and materials" OFF)
 
 find_package(ogre-next CONFIG REQUIRED)
-find_package(RmlUi REQUIRED REQUIRED)
+find_package(RmlUi CONFIG REQUIRED)
 
-
-add_library(RmlOgre)
+# ==============================================================================
+# Таргет: RmlOgre::RmlOgre (строго STATIC)
+# ==============================================================================
+add_library(RmlOgre STATIC)
 add_library(RmlOgre::RmlOgre ALIAS RmlOgre)
 
-set(RMLOGRE_MEDIA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/media)
+target_compile_features(RmlOgre PUBLIC cxx_std_20)
 
-target_compile_features(RmlOgre PUBLIC cxx_std_17)
+if(MSVC)
+    target_compile_options(RmlOgre PUBLIC /utf-8)
+endif()
+
 target_compile_options(RmlOgre PRIVATE
-	$<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
-		-Wall -Wextra -Wpedantic -Wno-unused-parameter>
-	$<$<CXX_COMPILER_ID:MSVC>:
-		/W4>
-)
-
-target_include_directories(RmlOgre
-	PUBLIC
-		$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-		$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-)
-
-target_include_directories(RmlOgre
-	SYSTEM PRIVATE
-		${OGRE_INCLUDE_DIR}
-		${OGRE_INCLUDE_DIR}/Hlms/Common
+    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+        -Wall -Wextra -Wpedantic -Wno-unused-parameter>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
 )
 
 target_sources(RmlOgre
-	PRIVATE
-		src/RmlOgre/Compositor/CompositorPassRml.cpp
-		src/RmlOgre/Material.cpp
-		src/RmlOgre/RenderInterface.cpp
-		src/RmlOgre/RenderObject.cpp
-		src/RmlOgre/filters.cpp
-		src/RmlOgre/geometry.cpp
-		src/RmlOgre/shaders.cpp
-		
+    PRIVATE
+        src/RmlOgre/Compositor/CompositorPassRml.cpp
+        src/RmlOgre/Material.cpp
+        src/RmlOgre/RenderInterface.cpp
+        src/RmlOgre/RenderObject.cpp
+        src/RmlOgre/filters.cpp
+        src/RmlOgre/geometry.cpp
+        src/RmlOgre/geometry.hpp
+        src/RmlOgre/shaders.cpp
+        src/RmlOgre/shaders.hpp
+    PUBLIC
+        FILE_SET HEADERS
+        BASE_DIRS src
+        FILES
+            src/RmlOgre/Compositor/CompositorPassRml.hpp
+            src/RmlOgre/Compositor/CompositorPassRmlDef.hpp
+            src/RmlOgre/FilterMaker.hpp
+            src/RmlOgre/Material.hpp
+            src/RmlOgre/ObjectIndex.hpp
+            src/RmlOgre/RenderInterface.hpp
+            src/RmlOgre/RenderObject.hpp
+            src/RmlOgre/RmlCommandBuffer.hpp
+            src/RmlOgre/ShaderMaker.hpp
+            src/RmlOgre/filters.hpp
 )
 
 target_link_libraries(RmlOgre
-	OGRE::OgreNextMain
-	OGRE::OgreNextHlmsUnlit
-
-	RmlUi::RmlUi
+    PUBLIC
+        OGRE::OgreNextMain
+        OGRE::OgreNextHlmsUnlit
+        RmlUi::RmlUi
 )
 
-set(PUBLIC_HEADERS
-	src/RmlOgre/CompositorPassGeometry.hpp
-	src/RmlOgre/CompositorPassGeometryDef.hpp
-	src/RmlOgre/RenderInterface.hpp
-	src/RmlOgre/RenderObject.hpp
-)
-set_target_properties(RmlOgre
-	PROPERTIES PUBLIC_HEADER "${PUBLIC_HEADERS}"
-)
+# Для tests/ и example/ внутри репозитория
+set(RMLOGRE_MEDIA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/media")
 
-if(BUILD_EXAMPLE)
-	add_subdirectory("example")
+if(RMLOGRE_BUILD_EXAMPLE)
+    add_subdirectory(example)
 endif()
-include(CTest)
-if(BUILD_TESTS)
-	add_subdirectory("tests")
+
+if(RMLOGRE_BUILD_TESTS)
+    include(CTest)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
+
+# ==============================================================================
+# Установка (Install) для vcpkg overlay
+# ==============================================================================
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+install(TARGETS RmlOgre
+    EXPORT RmlOgreTargets
+    FILE_SET HEADERS DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+if(RMLOGRE_INSTALL_MEDIA)
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/media/scripts/materials/Rml"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/RmlOgre/media/scripts/materials"
+    )
+endif()
+
+install(EXPORT RmlOgreTargets
+    NAMESPACE RmlOgre::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/RmlOgre"
+)
+
+set(RMLOGRE_CONFIG_FILE "${CMAKE_CURRENT_BINARY_DIR}/RmlOgre-config.cmake")
+set(RMLOGRE_VERSION_FILE "${CMAKE_CURRENT_BINARY_DIR}/RmlOgre-config-version.cmake")
+
+file(WRITE "${RMLOGRE_CONFIG_FILE}"
+"include(CMakeFindDependencyMacro)\n"
+"find_dependency(ogre-next CONFIG)\n"
+"find_dependency(RmlUi CONFIG)\n"
+"include(\"\${CMAKE_CURRENT_LIST_DIR}/RmlOgreTargets.cmake\")\n"
+"\n"
+"if(EXISTS \"\${CMAKE_CURRENT_LIST_DIR}/media\")\n"
+"    set(RMLOGRE_MEDIA_DIR \"\${CMAKE_CURRENT_LIST_DIR}/media\")\n"
+"elseif(EXISTS \"\${CMAKE_CURRENT_LIST_DIR}/../../../${CMAKE_INSTALL_DATADIR}/RmlOgre/media\")\n"
+"    get_filename_component(RMLOGRE_MEDIA_DIR \"\${CMAKE_CURRENT_LIST_DIR}/../../../${CMAKE_INSTALL_DATADIR}/RmlOgre/media\" ABSOLUTE)\n"
+"endif()\n"
+)
+
+write_basic_package_version_file("${RMLOGRE_VERSION_FILE}"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+install(FILES
+    "${RMLOGRE_CONFIG_FILE}"
+    "${RMLOGRE_VERSION_FILE}"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/RmlOgre"
+)
