@@ -28,22 +28,49 @@ Ogre::Vector4 to_ogre(Rml::ColourbPremultiplied c)
 
 void BlurFilter::apply(RenderInterface& renderInterface)
 {
-	RenderPassSettings passSettings = renderInterface.currentRenderPassSettings();
-	if(this->halfSamples > 0)
+	const RenderPassSettings orig = renderInterface.currentRenderPassSettings();
+	RenderPassSettings passSettings = orig;
+
+	constexpr int kBlurMargin = BlurFilterMaker::NUM_WEIGHTS - 1; // 7 текселей
+
+	// Получаем габариты текущего RT (например, через helper на RenderInterface)
+	const Rml::Vector2i rtSize{
+		static_cast<int>(renderInterface.GetOutput()->getWidth()),
+		static_cast<int>(renderInterface.GetOutput()->getHeight())
+	};
+
+	auto expandAndClamp = [&](Rml::Rectanglei rect, int padX, int padY) {
+		rect.p0.x = std::max(0, rect.p0.x - padX);
+		rect.p0.y = std::max(0, rect.p0.y - padY);
+		rect.p1.x = std::min(rtSize.x, rect.p1.x + padX);
+		rect.p1.y = std::min(rtSize.y, rect.p1.y + padY);
+		return rect;
+		};
+
+	for (int i = 0; i < this->halfSamples; ++i)
 	{
 		passSettings.scissorRegion.p0 /= 2;
-		renderInterface.addPass(RenderQuadPass(this->halfsample, passSettings));
-		for(int i = 0; i < this->halfSamples - 1; ++i)
-		{
-			passSettings.scissorRegion.p0 /= 2;
-			passSettings.scissorRegion.p1 = (passSettings.scissorRegion.p1 + Rml::Vector2i{1, 1}) / 2;
-			renderInterface.addPass(RenderQuadPass(this->halfsample, passSettings));
-		}
+		passSettings.scissorRegion.p1 = (passSettings.scissorRegion.p1 + Rml::Vector2i{ 1, 1 }) / 2;
+
+		// Каждый последующий halfsample читает 2x область предыдущего
+		const int margin = kBlurMargin << (this->halfSamples - 1 - i);
+		RenderPassSettings padded = passSettings;
+		if (padded.enableScissor)
+			padded.scissorRegion = expandAndClamp(padded.scissorRegion, margin, margin);
+
+		renderInterface.addPass(RenderQuadPass(this->halfsample, padded));
 	}
-	passSettings.scissorRegion.p0.x = renderInterface.currentRenderPassSettings().scissorRegion.p0.x;
-	passSettings.scissorRegion.p1 = renderInterface.currentRenderPassSettings().scissorRegion.p1;
+
+	// blurH растягивает обратно только X (scale = {1/step, 1});
+	// по Y оставляем сжатую область + запас kBlurMargin под blurV
+	passSettings.scissorRegion.p0.x = orig.scissorRegion.p0.x;
+	passSettings.scissorRegion.p1.x = orig.scissorRegion.p1.x;
+	if (passSettings.enableScissor)
+		passSettings.scissorRegion = expandAndClamp(passSettings.scissorRegion, 0, kBlurMargin);
 	renderInterface.addPass(RenderQuadPass(this->blurH, passSettings));
-	renderInterface.addPass(RenderQuadPass(this->blurV, renderInterface.currentRenderPassSettings()));
+
+	// blurV растягивает обратно Y в исходный scissor
+	renderInterface.addPass(RenderQuadPass(this->blurV, orig));
 }
 
 BlurFilterMaker::BlurFilterMaker()
@@ -63,7 +90,7 @@ BlurFilter BlurFilterMaker::make(float sigma)
 	}
 	float scale = 1.0f / step;
 
-	std::array<float, NUM_WEIGHTS> weights;
+	std::array<float, NUM_WEIGHTS> weights{};
 	if(sigma < 0.1f)
 		weights[0] = 1.0f;
 	else
