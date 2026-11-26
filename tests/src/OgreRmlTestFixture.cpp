@@ -32,9 +32,87 @@
 #include <stdexcept>
 #include <string_view>
 
+#ifdef _WIN32
+#	ifndef WIN32_LEAN_AND_MEAN
+#		define WIN32_LEAN_AND_MEAN
+#	endif
+#	ifndef NOMINMAX
+#		define NOMINMAX
+#	endif
+#	include <windows.h>
+#endif
+#include <array>
+#include <cstdlib>
+#include <iostream>
+#include <optional>
+
 namespace rml_tests {
 
 	namespace {
+
+		std::optional<std::filesystem::path> find_vk_validation_layer_dir(
+			const std::filesystem::path& fallbackBuildRoot = {})
+		{
+			namespace fs = std::filesystem;
+
+			const std::array<fs::path, 4> relSubpaths = {
+				fs::path{},
+				fs::path("vcpkg_installed") / "x64-windows" / "bin",
+				fs::path("vcpkg_installed") / "x64-windows" / "debug" / "bin",
+				fs::path("vcpkg_installed") / "x64-windows" / "tools" / "vulkan-validationlayers"
+			};
+
+			auto checkRoot = [&](const fs::path& root) -> std::optional<fs::path> {
+				if (root.empty())
+					return std::nullopt;
+				std::error_code ec;
+				for (const auto& rel : relSubpaths) {
+					const fs::path dir = rel.empty() ? root : (root / rel);
+					if (fs::exists(dir / "VkLayer_khronos_validation.json", ec)) {
+						return fs::weakly_canonical(dir, ec);
+					}
+				}
+				return std::nullopt;
+				};
+
+#ifdef _WIN32
+			// 1. Ищем относительно папки .exe и вверх до корня build-директории (out/build/x64-debug)
+			char exeBuf[MAX_PATH]{};
+			if (GetModuleFileNameA(nullptr, exeBuf, MAX_PATH) > 0) {
+				fs::path probe = fs::path(exeBuf).parent_path();
+				for (int depth = 0; depth < 4 && !probe.empty(); ++depth) {
+					if (auto found = checkRoot(probe)) {
+						return found;
+					}
+					probe = probe.parent_path();
+				}
+			}
+#endif
+
+			// 2. Запасной корень сборки (например, VisionLib/out/build/x64-debug)
+			return checkRoot(fallbackBuildRoot);
+		}
+
+		void enable_vulkan_validation_env(const std::filesystem::path& fallbackBuildRoot = {})
+		{
+#ifdef _WIN32
+			if (auto layerDir = find_vk_validation_layer_dir(fallbackBuildRoot)) {
+				const std::string dirStr = layerDir->string();
+				_putenv_s("VK_ADD_LAYER_PATH", dirStr.c_str());
+				std::cout << "[Vulkan] VK_ADD_LAYER_PATH=" << dirStr << "\n";
+			}
+			else {
+				std::cerr << "[Vulkan] VkLayer_khronos_validation.json not found\n";
+			}
+
+			// Принудительно активируем слой и дублируем error/warn в stdout
+			// (работает даже без создания внешнего VkInstance и VkDebugUtilsMessengerEXT)
+			_putenv_s("VK_INSTANCE_LAYERS", "VK_LAYER_KHRONOS_validation");
+			_putenv_s("VK_KHRONOS_VALIDATION_DEBUG_ACTION", "VK_DBG_LAYER_ACTION_LOG_MSG");
+			_putenv_s("VK_KHRONOS_VALIDATION_REPORT_FLAGS", "error,warn");
+			_putenv_s("VK_KHRONOS_VALIDATION_LOG_FILENAME", "stdout");
+#endif
+		}
 
 		struct ScopedCurrentPath {
 			std::filesystem::path prev;
@@ -254,7 +332,8 @@ namespace rml_tests {
 		, _output_dir(std::filesystem::absolute(RMLOGRE_TEST_OUTPUT_DIR))
 	{
 		const Ogre::AbiCookie abiCookie = Ogre::generateAbiCookie();
-
+		enable_vulkan_validation_env(
+			std::filesystem::current_path());
 		_root.reset(OGRE_NEW Ogre::Root(&abiCookie, "", "", "./RmlOgreRenderTests.log"));
 
 #if RML_TEST_STATIC_OGRE
@@ -273,6 +352,10 @@ namespace rml_tests {
 		_root->setRenderSystem(rs);
 
 		rs->setConfigOption("sRGB Gamma Conversion", "No");
+		const auto& opts = rs->getConfigOptions();
+		if (opts.find("Debug Layer") != opts.end()) {
+			rs->setConfigOption("Debug Layer", "Yes");
+		}
 		_root->initialise(false);
 
 		Ogre::NameValuePairList miscParams;
