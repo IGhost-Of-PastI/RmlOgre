@@ -1,158 +1,162 @@
+// filters.hpp
 #ifndef NIMBLE_RMLOGRE_FILTERS_HPP
 #define NIMBLE_RMLOGRE_FILTERS_HPP
 
 #include "FilterMaker.hpp"
 
+#include <OgreMatrix4.h>
 
 namespace nimble::RmlOgre {
 
-class BlurFilter : public Filter
-{
-	Ogre::MaterialPtr halfsample;
-	Ogre::MaterialPtr blurH;
-	Ogre::MaterialPtr blurV;
-	int halfSamples;
+	class BlurFilter : public Filter
+	{
+		Ogre::MaterialPtr halfsample;
+		Ogre::MaterialPtr blurH;
+		Ogre::MaterialPtr blurV;
+		int halfSamples = 0;
 
-public:
-	BlurFilter(
-		Ogre::MaterialPtr halfsample,
-		Ogre::MaterialPtr blurH,
-		Ogre::MaterialPtr blurV,
-		int halfSamples
-	) :
-		halfsample{halfsample},
-		blurH{blurH},
-		blurV{blurV},
-		halfSamples{halfSamples}
-	{}
+	public:
+		BlurFilter(
+			Ogre::MaterialPtr halfsample,
+			Ogre::MaterialPtr blurH,
+			Ogre::MaterialPtr blurV,
+			int halfSamples)
+			: halfsample(std::move(halfsample))
+			, blurH(std::move(blurH))
+			, blurV(std::move(blurV))
+			, halfSamples(halfSamples)
+		{
+		}
 
-	void apply(RenderInterface& renderInterface) override;
-};
+		const Ogre::MaterialPtr& halfsampleMaterial() const noexcept { return halfsample; }
+		const Ogre::MaterialPtr& blurHMaterial() const noexcept { return blurH; }
+		const Ogre::MaterialPtr& blurVMaterial() const noexcept { return blurV; }
+		int numHalfSamples() const noexcept { return halfSamples; }
 
-class BlurFilterMaker : public FilterMaker
-{
-	Ogre::MaterialPtr halfsampleMaterial;
-	Ogre::MaterialPtr blurMaterial;
+		void appendSteps(std::vector<FilterStep>& out) const override;
+	};
 
-public:
-	// Must be same as:
-	// NUM_WEIGHTS in media/scripts/material/Rml/GLSL/Blur_ps.glsl
-	// NUM_WEIGHTS in media/scripts/material/Rml/HLSL/Blur_ps.hlsl
-	static constexpr int NUM_WEIGHTS = 8;
-	static constexpr float MAX_SCALED_SIGMA = 3.0f;
+	class BlurFilterMaker : public FilterMaker
+	{
+		Ogre::MaterialPtr halfsampleMaterial;
+		Ogre::MaterialPtr blurMaterial;
 
-	BlurFilterMaker();
-	BlurFilter make(float sigma);
-	std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
-};
+	public:
+		static constexpr int NUM_WEIGHTS = 8;
+		static constexpr float MAX_SCALED_SIGMA = 3.0f;
 
-class DropShadowFilter : public Filter
-{
-	BlurFilter blurFilter;
-	Ogre::MaterialPtr shadowMaterial;
+		BlurFilterMaker();
+		BlurFilter make(float sigma);
+		std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
+	};
 
-public:
-	DropShadowFilter(
-		BlurFilter blurFilter,
-		Ogre::MaterialPtr shadowMaterial
-	) :
-		blurFilter{blurFilter},
-		shadowMaterial{shadowMaterial}
-	{}
+	class DropShadowFilter : public Filter
+	{
+		BlurFilter blurFilter;
+		Ogre::MaterialPtr shadowMaterial;
 
-	void apply(RenderInterface& renderInterface) override;
-};
+	public:
+		DropShadowFilter(
+			BlurFilter blurFilter,
+			Ogre::MaterialPtr shadowMaterial)
+			: blurFilter(std::move(blurFilter))
+			, shadowMaterial(std::move(shadowMaterial))
+		{
+		}
 
-class DropShadowFilterMaker : public FilterMaker
-{
-	BlurFilterMaker blurFilterMaker;
-	Ogre::MaterialPtr shadowMaterial;
-	Ogre::MaterialPtr blurlessShadowMaterial;
+		void appendSteps(std::vector<FilterStep>& out) const override;
+	};
 
-public:
-	DropShadowFilterMaker();
-	std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
-};
+	class DropShadowFilterMaker : public FilterMaker
+	{
+		BlurFilterMaker blurFilterMaker;
+		Ogre::MaterialPtr shadowMaterial;
+		Ogre::MaterialPtr blurlessShadowMaterial;
 
-class OpacityFilterMaker : public FilterMaker
-{
-	Ogre::MaterialPtr baseMaterial;
+	public:
+		DropShadowFilterMaker();
+		std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
+	};
 
-public:
-	OpacityFilterMaker();
-	std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
-};
+	class OpacityFilterMaker : public FilterMaker
+	{
+		Ogre::MaterialPtr baseMaterial;
 
-class ColourMatrixFilterMaker : public FilterMaker
-{
-	Ogre::MaterialPtr baseMaterial;
+	public:
+		OpacityFilterMaker();
+		std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
+	};
 
-public:
-	ColourMatrixFilterMaker();
-	using FilterMaker::make;
-	std::unique_ptr<Filter> make(const Ogre::Matrix4& matrix);
-};
+	class ColourMatrixFilterMaker : public FilterMaker
+	{
+		Ogre::MaterialPtr baseMaterial;
 
-class BrightnessFilterMaker : public ColourMatrixFilterMaker
-{
-public:
-	using ColourMatrixFilterMaker::make;
-	std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
-};
+	public:
+		ColourMatrixFilterMaker();
+		using FilterMaker::make;
+		std::unique_ptr<Filter> make(const Ogre::Matrix4& matrix);
+	};
 
-class ContrastFilterMaker : public ColourMatrixFilterMaker
-{
-public:
-	using ColourMatrixFilterMaker::make;
-	std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
-};
+	class BrightnessFilterMaker : public ColourMatrixFilterMaker
+	{
+	public:
+		using ColourMatrixFilterMaker::make;
+		std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
+	};
 
-class InvertFilterMaker : public ColourMatrixFilterMaker
-{
-public:
-	using ColourMatrixFilterMaker::make;
-	std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
-};
+	class ContrastFilterMaker : public ColourMatrixFilterMaker
+	{
+	public:
+		using ColourMatrixFilterMaker::make;
+		std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
+	};
 
-class GrayscaleFilterMaker : public ColourMatrixFilterMaker
-{
-public:
-	using ColourMatrixFilterMaker::make;
-	std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
-};
+	class InvertFilterMaker : public ColourMatrixFilterMaker
+	{
+	public:
+		using ColourMatrixFilterMaker::make;
+		std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
+	};
 
-class SepiaFilterMaker : public ColourMatrixFilterMaker
-{
-public:
-	using ColourMatrixFilterMaker::make;
-	std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
-};
+	class GrayscaleFilterMaker : public ColourMatrixFilterMaker
+	{
+	public:
+		using ColourMatrixFilterMaker::make;
+		std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
+	};
 
-class HueRotateFilterMaker : public ColourMatrixFilterMaker
-{
-public:
-	using ColourMatrixFilterMaker::make;
-	std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
-};
+	class SepiaFilterMaker : public ColourMatrixFilterMaker
+	{
+	public:
+		using ColourMatrixFilterMaker::make;
+		std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
+	};
 
-class SaturateFilterMaker : public ColourMatrixFilterMaker
-{
-public:
-	using ColourMatrixFilterMaker::make;
-	std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
-};
+	class HueRotateFilterMaker : public ColourMatrixFilterMaker
+	{
+	public:
+		using ColourMatrixFilterMaker::make;
+		std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
+	};
 
-class MaskImageFilterMaker : public FilterMaker
-{
-	Ogre::MaterialPtr baseMaterial;
+	class SaturateFilterMaker : public ColourMatrixFilterMaker
+	{
+	public:
+		using ColourMatrixFilterMaker::make;
+		std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
+	};
 
-public:
-	MaskImageFilterMaker();
+	class MaskImageFilterMaker : public FilterMaker
+	{
+		Ogre::MaterialPtr baseMaterial;
 
-	SingleMaterialFilter make(Ogre::TextureGpu* image);
-	std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
-};
+	public:
+		MaskImageFilterMaker();
 
-}
+		SingleMaterialFilter make(Ogre::TextureGpu* image, bool takeOwnership = false);
+		std::unique_ptr<Filter> make(const Rml::Dictionary& parameters) override;
+	};
+
+} // namespace nimble::RmlOgre
 
 #endif // NIMBLE_RMLOGRE_FILTERS_HPP

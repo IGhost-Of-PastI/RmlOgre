@@ -1,3 +1,4 @@
+// RenderInterface.cpp
 #include "RenderInterface.hpp"
 
 #include "geometry.hpp"
@@ -11,6 +12,7 @@
 #include <OgreRenderSystem.h>
 #include <OgreRoot.h>
 #include <OgreTextureFilters.h>
+#include <OgreTextureGpu.h>
 #include <OgreTextureGpuManager.h>
 #include <Vao/OgreVaoManager.h>
 #include <Vao/OgreVertexArrayObject.h>
@@ -38,7 +40,7 @@ RenderInterface::RenderInterface(Ogre::String name)
 	mSamplerblock.mU = Ogre::TextureAddressingMode::TAM_WRAP;
 	mSamplerblock.mV = Ogre::TextureAddressingMode::TAM_WRAP;
 
-	// Базовый материал без текстуры (индекс 0 в mMaterials)
+	// Индекс 0 в mMaterials — материал без текстуры
 	auto* noTextureDatablock = static_cast<Ogre::HlmsUnlitDatablock*>(
 		mHlms->getDatablock("NoTexture"));
 	if (!noTextureDatablock)
@@ -76,11 +78,40 @@ RenderInterface::RenderInterface(Ogre::String name)
 	mFrameData.stencilMaterial = Material{ nullptr, stencilDatablock };
 	mFrameData.stencilMaterial.calculateHlmsHash();
 
-	// Градиентные шейдеры
+	// Фильтры (индекс 0 зарезервирован под пустой handle)
+	AddFilterMaker("blur", std::make_unique<BlurFilterMaker>());
+	AddFilterMaker("drop-shadow", std::make_unique<DropShadowFilterMaker>());
+	AddFilterMaker("opacity", std::make_unique<OpacityFilterMaker>());
+	AddFilterMaker("brightness", std::make_unique<BrightnessFilterMaker>());
+	AddFilterMaker("contrast", std::make_unique<ContrastFilterMaker>());
+	AddFilterMaker("invert", std::make_unique<InvertFilterMaker>());
+	AddFilterMaker("grayscale", std::make_unique<GrayscaleFilterMaker>());
+	AddFilterMaker("sepia", std::make_unique<SepiaFilterMaker>());
+	AddFilterMaker("hue-rotate", std::make_unique<HueRotateFilterMaker>());
+	AddFilterMaker("saturate", std::make_unique<SaturateFilterMaker>());
+	mFilters.insert({});
+
+	// Градиентные шейдеры (индекс 0 зарезервирован под пустой handle)
 	AddShaderMaker("linear-gradient", std::make_unique<LinearGradientMaker>());
 	AddShaderMaker("radial-gradient", std::make_unique<RadialGradientMaker>());
 	AddShaderMaker("conic-gradient", std::make_unique<ConicGradientMaker>());
 	mShaders.insert({});
+}
+
+RenderInterface::RenderInterface(
+	const Ogre::String& name,
+	Ogre::SceneManager* /*sceneManager*/,
+	Ogre::TextureGpu* output,
+	Ogre::TextureGpu* /*background*/)
+	: RenderInterface(name)
+{
+	if (output)
+	{
+		mViewportSize = Rml::Vector2i{
+			static_cast<int>(output->getWidth()),
+			static_cast<int>(output->getHeight())
+		};
+	}
 }
 
 void RenderInterface::releaseBufferedGeometries()
@@ -110,6 +141,9 @@ void RenderInterface::releaseBufferedTextures()
 
 	for (Rml::TextureHandle texture : mReleaseTextures)
 	{
+		if (!mMaterials.has(texture))
+			continue;
+
 		auto& material = mMaterials.at(texture);
 		auto* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(material.datablock);
 		auto* textureGpu = datablock->getTexture(0);
@@ -123,6 +157,47 @@ void RenderInterface::releaseBufferedTextures()
 		mMaterials.erase(texture);
 	}
 	mReleaseTextures.clear();
+
+	for (Ogre::TextureGpu* texture : mReleaseRenderTextures)
+	{
+		if (texture)
+			textureManager.destroyTexture(texture);
+	}
+	mReleaseRenderTextures.clear();
+}
+
+Ogre::TextureGpu* RenderInterface::createSaveLayerTexture(Rml::Vector2i& outDimensions)
+{
+	outDimensions = mCurrentScissor.enabled
+		? mCurrentScissor.region.Size()
+		: mViewportSize;
+	outDimensions.x = std::max(1, outDimensions.x);
+	outDimensions.y = std::max(1, outDimensions.y);
+
+	Ogre::String texName = mName;
+	texName.append("_SavedLayer_");
+	texName.append(std::to_string(mRenderTextureId++));
+
+	auto* textureManager = Ogre::Root::getSingleton()
+		.getRenderSystem()
+		->getTextureGpuManager();
+	Ogre::TextureGpu* texture = textureManager->createTexture(
+		texName,
+		Ogre::GpuPageOutStrategy::Discard,
+		Ogre::TextureFlags::RenderToTexture,
+		Ogre::TextureTypes::Type2D);
+	texture->setPixelFormat(Ogre::PixelFormatGpu::PFG_RGBA8_UNORM);
+	texture->setResolution(
+		static_cast<Ogre::uint32>(outDimensions.x),
+		static_cast<Ogre::uint32>(outDimensions.y));
+	texture->setNumMipmaps(1u);
+	texture->scheduleTransitionTo(Ogre::GpuResidency::Resident);
+	return texture;
+}
+
+void RenderInterface::AddFilterMaker(Rml::String name, std::unique_ptr<FilterMaker> filterMaker)
+{
+	mFilterMakers.emplace(std::move(name), std::move(filterMaker));
 }
 
 void RenderInterface::AddShaderMaker(Rml::String name, std::unique_ptr<ShaderMaker> shaderMaker)
@@ -132,19 +207,21 @@ void RenderInterface::AddShaderMaker(Rml::String name, std::unique_ptr<ShaderMak
 
 void RenderInterface::BeginFrame()
 {
+	mFrameData.clear();
+
 	releaseBufferedGeometries();
 	releaseBufferedTextures();
 
-	mFrameData.clear();
 	mCurrentScissor = {};
 	mCurrentTransform = Ogre::Matrix4::IDENTITY;
 	mStencilEnabled = false;
 	mStencilRef = 0;
+	mLayerDepth = 1;
 }
 
 void RenderInterface::EndFrame()
 {
-	// Команды уже записаны в mFrameData; CompositorPassRml исполнит их синхронно.
+	// Все команды записаны в mFrameData; CompositorPassRml исполнит их синхронно.
 }
 
 Rml::CompiledGeometryHandle RenderInterface::CompileGeometry(
@@ -355,47 +432,110 @@ void RenderInterface::RenderToClipMask(
 	}
 }
 
-// --- Заглушки Этапа 2 ---
-
 Rml::LayerHandle RenderInterface::PushLayer()
 {
-	return 0;
+	const std::uint32_t newLayerId = mLayerDepth++;
+	mFrameData.commands.push_back(PushLayerCmd{ newLayerId });
+	return static_cast<Rml::LayerHandle>(newLayerId);
 }
 
 void RenderInterface::CompositeLayers(
-	Rml::LayerHandle /*source*/,
-	Rml::LayerHandle /*destination*/,
-	Rml::BlendMode /*blend_mode*/,
-	Rml::Span<const Rml::CompiledFilterHandle> /*filters*/)
+	Rml::LayerHandle source,
+	Rml::LayerHandle destination,
+	Rml::BlendMode blend_mode,
+	Rml::Span<const Rml::CompiledFilterHandle> filters)
 {
+	CompositeLayersCmd cmd{};
+	cmd.sourceLayer = static_cast<std::uint32_t>(source);
+	cmd.destinationLayer = static_cast<std::uint32_t>(destination);
+	cmd.restoreLayer = activeLayer();
+	cmd.blendMode = blend_mode;
+	cmd.scissor = mCurrentScissor;
+	cmd.stencilEnabled = mStencilEnabled;
+	cmd.stencilRef = mStencilRef;
+
+	for (Rml::CompiledFilterHandle filterHandle : filters)
+	{
+		if (mFilters.has(filterHandle) && mFilters[filterHandle])
+			mFilters[filterHandle]->appendSteps(cmd.filters);
+	}
+
+	mFrameData.commands.push_back(std::move(cmd));
 }
 
 void RenderInterface::PopLayer()
 {
+	if (mLayerDepth > 1)
+	{
+		--mLayerDepth;
+		mFrameData.commands.push_back(PopLayerCmd{ activeLayer() });
+	}
 }
 
 Rml::CompiledFilterHandle RenderInterface::CompileFilter(
-	const Rml::String& /*name*/,
-	const Rml::Dictionary& /*parameters*/)
+	const Rml::String& name,
+	const Rml::Dictionary& parameters)
 {
-	return {};
+	auto maker = mFilterMakers.find(name);
+	if (maker == mFilterMakers.end())
+		return {};
+
+	auto filter = maker->second->make(parameters);
+	return mFilters.insert(std::move(filter));
 }
 
-void RenderInterface::ReleaseFilter(Rml::CompiledFilterHandle /*filter*/)
+void RenderInterface::ReleaseFilter(Rml::CompiledFilterHandle filter)
 {
+	if (!mFilters.has(filter))
+		return;
+
+	if (auto& compiled = mFilters.at(filter))
+	{
+		if (auto* ownedTex = compiled->ownedTexture())
+			mReleaseRenderTextures.push_back(ownedTex);
+	}
+	mFilters.erase(filter);
 }
 
 Rml::TextureHandle RenderInterface::SaveLayerAsTexture()
 {
-	return {};
+	Rml::Vector2i dimensions{};
+	Ogre::TextureGpu* texture = createSaveLayerTexture(dimensions);
+
+	Ogre::String id = mName;
+	id.append("_Texture_");
+	id.append(std::to_string(mDatablockId++));
+	auto* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(
+		mHlms->createDatablock(id, id, mMacroblock, mBlendblock, Ogre::HlmsParamVec()));
+	datablock->setTexture(0, texture);
+	datablock->setUseColour(true);
+
+	mFrameData.commands.push_back(SaveLayerCmd{
+		.sourceLayer = activeLayer(),
+		.dstTexture = texture,
+		.scissor = mCurrentScissor
+		});
+
+	Material material{ nullptr, datablock, texture };
+	material.calculateHlmsHash();
+	return mMaterials.insert(std::move(material));
 }
 
 Rml::CompiledFilterHandle RenderInterface::SaveLayerAsMaskImage()
 {
-	return {};
-}
+	Rml::Vector2i dimensions{};
+	Ogre::TextureGpu* texture = createSaveLayerTexture(dimensions);
 
-// --- Шейдеры (градиенты) ---
+	mFrameData.commands.push_back(SaveLayerCmd{
+		.sourceLayer = activeLayer(),
+		.dstTexture = texture,
+		.scissor = mCurrentScissor
+		});
+
+	auto filter = std::make_unique<SingleMaterialFilter>(
+		mMaskImageFilterMaker.make(texture, true));
+	return mFilters.insert(std::move(filter));
+}
 
 Rml::CompiledShaderHandle RenderInterface::CompileShader(
 	const Rml::String& name,

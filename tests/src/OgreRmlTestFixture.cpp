@@ -334,6 +334,10 @@ namespace rml_tests {
 		const auto refPath = rmlDir / "reference" / spec.reference_filename;
 
 		const auto [width, height] = read_png_dimensions(refPath);
+		_render_interface->SetViewportSize(Rml::Vector2i{
+			static_cast<int>(width),
+			static_cast<int>(height)
+			});
 
 		auto* rs = _root->getRenderSystem();
 		auto* texMgr = rs->getTextureGpuManager();

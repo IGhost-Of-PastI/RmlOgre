@@ -44,20 +44,11 @@ target_include_directories(RmlOgre
 
 target_sources(RmlOgre
 	PRIVATE
-		src/RmlOgre/Compositor/CompositorPass.cpp
-		src/RmlOgre/Compositor/CompositorPassGeometry.cpp
-		src/RmlOgre/Compositor/CompositorPassRenderQuad.cpp
-		src/RmlOgre/Compositor/CompositorPassRenderQuadDef.cpp
 		src/RmlOgre/Compositor/CompositorPassRml.cpp
-		src/RmlOgre/BaseRenderPass.cpp
-		#src/RmlOgre/FilterMaker.cpp
 		src/RmlOgre/Material.cpp
-		src/RmlOgre/NodeConnectionMap.cpp
-		src/RmlOgre/Pass.cpp
 		src/RmlOgre/RenderInterface.cpp
 		src/RmlOgre/RenderObject.cpp
-		#src/RmlOgre/Workspace.cpp
-		#src/RmlOgre/filters.cpp
+		src/RmlOgre/filters.cpp
 		src/RmlOgre/geometry.cpp
 		src/RmlOgre/shaders.cpp
 		

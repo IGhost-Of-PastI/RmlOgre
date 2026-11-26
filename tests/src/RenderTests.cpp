@@ -83,32 +83,32 @@ BOOST_AUTO_TEST_CASE(test_06_clip_mask) {
 		});
 }
 
-//BOOST_AUTO_TEST_CASE(test_07_filters) {
-//	check_render_test({
-//		.name = "render_test_07_filters",
-//		.rml_filename = "render_test_07_filters.rml",
-//		.reference_filename = "render_test_07_filters.png",
-//		.compare_options = {.channel_tolerance = 6, .max_diff_ratio = 0.03, .max_rmse = 2.5 }
-//		});
-//}
-//
-//BOOST_AUTO_TEST_CASE(test_08_render_to_texture) {
-//	check_render_test({
-//		.name = "render_test_08_render_to_texture",
-//		.rml_filename = "render_test_08_render_to_texture.rml",
-//		.reference_filename = "render_test_08_render_to_texture.png",
-//		.compare_options = {.channel_tolerance = 4, .max_diff_ratio = 0.008, .max_rmse = 4.0 }
-//		});
-//}
-//
-//BOOST_AUTO_TEST_CASE(test_09_mask_image) {
-//	check_render_test({
-//		.name = "render_test_09_mask_image",
-//		.rml_filename = "render_test_09_mask_image.rml",
-//		.reference_filename = "render_test_09_mask_image.png",
-//		.compare_options = {.channel_tolerance = 4, .max_diff_ratio = 0.008, .max_rmse = 4.0 }
-//		});
-//}
+BOOST_AUTO_TEST_CASE(test_07_filters) {
+	check_render_test({
+		.name = "render_test_07_filters",
+		.rml_filename = "render_test_07_filters.rml",
+		.reference_filename = "render_test_07_filters.png",
+		.compare_options = {.channel_tolerance = 6, .max_diff_ratio = 0.03, .max_rmse = 2.5 }
+		});
+}
+
+BOOST_AUTO_TEST_CASE(test_08_render_to_texture) {
+	check_render_test({
+		.name = "render_test_08_render_to_texture",
+		.rml_filename = "render_test_08_render_to_texture.rml",
+		.reference_filename = "render_test_08_render_to_texture.png",
+		.compare_options = {.channel_tolerance = 4, .max_diff_ratio = 0.008, .max_rmse = 4.0 }
+		});
+}
+
+BOOST_AUTO_TEST_CASE(test_09_mask_image) {
+	check_render_test({
+		.name = "render_test_09_mask_image",
+		.rml_filename = "render_test_09_mask_image.rml",
+		.reference_filename = "render_test_09_mask_image.png",
+		.compare_options = {.channel_tolerance = 4, .max_diff_ratio = 0.008, .max_rmse = 4.0 }
+		});
+}
 
 BOOST_AUTO_TEST_CASE(test_10_shaders) {
 	check_render_test({
