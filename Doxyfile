@@ -1,0 +1,31 @@
+﻿[IO.File]::WriteAllText("$PWD\Doxyfile", @"
+PROJECT_NAME           = "RmlOgre"
+OUTPUT_DIRECTORY       = docs/generated
+OUTPUT_LANGUAGE        = Russian
+INPUT_ENCODING         = UTF-8
+
+INPUT                  = src docs
+RECURSIVE              = YES
+FILE_PATTERNS          = *.hpp *.cpp *.dox
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+SOURCE_BROWSER         = YES
+
+HAVE_DOT               = YES
+DOT_IMAGE_FORMAT       = svg
+INTERACTIVE_SVG        = YES
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
+COLLABORATION_GRAPH    = YES
+UML_LOOK               = YES
+DOT_GRAPH_MAX_NODES    = 100
+DOT_MULTI_TARGETS      = YES
+
+WARN_IF_UNDOCUMENTED   = NO
+"@)
