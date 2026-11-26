@@ -1,214 +1,151 @@
 #include "RenderInterface.hpp"
 
-#include "Compositor/CompositorPassGeometry.hpp"
-#include "Compositor/CompositorPassGeometryDef.hpp"
 #include "geometry.hpp"
 #include "shaders.hpp"
 
-#include <Compositor/OgreCompositorManager2.h>
-#include <Compositor/OgreCompositorNode.h>
-#include <Compositor/OgreCompositorWorkspace.h>
-#include <Compositor/OgreCompositorNodeDef.h>
 #include <Hlms/Unlit/OgreHlmsUnlit.h>
 #include <Hlms/Unlit/OgreHlmsUnlitDatablock.h>
-#include <OgreCamera.h>
 #include <OgreHlmsManager.h>
+#include <OgreImage2.h>
 #include <OgrePixelFormatGpuUtils.h>
-#include <OgreRenderQueue.h>
+#include <OgreRenderSystem.h>
 #include <OgreRoot.h>
 #include <OgreTextureFilters.h>
 #include <OgreTextureGpuManager.h>
 #include <Vao/OgreVaoManager.h>
 #include <Vao/OgreVertexArrayObject.h>
 
-#include <RmlUi/Core/Core.h>
-#include <RmlUi/Core/Context.h>
-
+#include <algorithm>
+#include <cassert>
 
 using namespace nimble::RmlOgre;
 
-RenderInterface::RenderInterface(
-	const Ogre::String& name,
-	Ogre::SceneManager* sceneManager,
-	Ogre::TextureGpu* output,
-	Ogre::TextureGpu* background
-) :
-	hlms{static_cast<Ogre::HlmsUnlit*>(Ogre::Root::getSingleton().getHlmsManager()->getHlms(Ogre::HLMS_UNLIT))},
-	workspace(name, sceneManager, output, background)
+RenderInterface::RenderInterface(Ogre::String name)
+	: mName(std::move(name))
+	, mHlms(static_cast<Ogre::HlmsUnlit*>(
+		Ogre::Root::getSingleton().getHlmsManager()->getHlms(Ogre::HLMS_UNLIT)))
 {
-	this->macroblock.mScissorTestEnabled = true;
-	this->macroblock.mDepthCheck = false;
-	this->macroblock.mDepthWrite = false;
-	this->macroblock.mCullMode = Ogre::CULL_NONE;
+	mMacroblock.mScissorTestEnabled = true;
+	mMacroblock.mDepthCheck = false;
+	mMacroblock.mDepthWrite = false;
+	mMacroblock.mCullMode = Ogre::CULL_NONE;
 
-	this->blendblock.mSeparateBlend = false;
-	this->blendblock.mBlendOperation = Ogre::SceneBlendOperation::SBO_ADD;
-	this->blendblock.mDestBlendFactor = Ogre::SceneBlendFactor::SBF_ONE_MINUS_SOURCE_ALPHA;
-	this->blendblock.mSourceBlendFactor = Ogre::SceneBlendFactor::SBF_ONE;
+	mBlendblock.mSeparateBlend = false;
+	mBlendblock.mBlendOperation = Ogre::SceneBlendOperation::SBO_ADD;
+	mBlendblock.mDestBlendFactor = Ogre::SceneBlendFactor::SBF_ONE_MINUS_SOURCE_ALPHA;
+	mBlendblock.mSourceBlendFactor = Ogre::SceneBlendFactor::SBF_ONE;
 
-	this->samplerblock.mU = Ogre::TextureAddressingMode::TAM_WRAP;
-	this->samplerblock.mV = Ogre::TextureAddressingMode::TAM_WRAP;
+	mSamplerblock.mU = Ogre::TextureAddressingMode::TAM_WRAP;
+	mSamplerblock.mV = Ogre::TextureAddressingMode::TAM_WRAP;
 
+	// Базовый материал без текстуры (индекс 0 в mMaterials)
 	auto* noTextureDatablock = static_cast<Ogre::HlmsUnlitDatablock*>(
-		this->hlms->getDatablock("NoTexture"));
-	if(!noTextureDatablock)
+		mHlms->getDatablock("NoTexture"));
+	if (!noTextureDatablock)
+	{
 		noTextureDatablock = static_cast<Ogre::HlmsUnlitDatablock*>(
-			this->hlms->createDatablock(
+			mHlms->createDatablock(
 				"NoTexture",
 				"NoTexture",
-				this->macroblock,
-				this->blendblock,
-				Ogre::HlmsParamVec())
-		);
+				mMacroblock,
+				mBlendblock,
+				Ogre::HlmsParamVec()));
+	}
 	noTextureDatablock->setUseColour(true);
-	Material noTextureMaterial{nullptr, noTextureDatablock};
+	Material noTextureMaterial{ nullptr, noTextureDatablock };
 	noTextureMaterial.calculateHlmsHash();
-	this->materials.insert(std::move(noTextureMaterial));
+	mMaterials.insert(std::move(noTextureMaterial));
 
-	this->AddFilterMaker("blur", std::make_unique<BlurFilterMaker>());
-	this->AddFilterMaker("drop-shadow", std::make_unique<DropShadowFilterMaker>());
-	this->AddFilterMaker("opacity", std::make_unique<OpacityFilterMaker>());
-	this->AddFilterMaker("brightness", std::make_unique<BrightnessFilterMaker>());
-	this->AddFilterMaker("contrast", std::make_unique<ContrastFilterMaker>());
-	this->AddFilterMaker("invert", std::make_unique<InvertFilterMaker>());
-	this->AddFilterMaker("grayscale", std::make_unique<GrayscaleFilterMaker>());
-	this->AddFilterMaker("sepia", std::make_unique<SepiaFilterMaker>());
-	this->AddFilterMaker("hue-rotate", std::make_unique<HueRotateFilterMaker>());
-	this->AddFilterMaker("saturate", std::make_unique<SaturateFilterMaker>());
-	this->filters.insert({});
+	// Материал только для записи в stencil (запись в RGBA отключена)
+	Ogre::HlmsBlendblock stencilBlendblock = mBlendblock;
+	stencilBlendblock.mBlendChannelMask = 0u;
 
-	this->AddShaderMaker("linear-gradient", std::make_unique<LinearGradientMaker>());
-	this->AddShaderMaker("radial-gradient", std::make_unique<RadialGradientMaker>());
-	this->AddShaderMaker("conic-gradient", std::make_unique<ConicGradientMaker>());
-	this->shaders.insert({});
+	const Ogre::String stencilDbName = "Rml_StencilOnly";
+	auto* stencilDatablock = static_cast<Ogre::HlmsUnlitDatablock*>(
+		mHlms->getDatablock(stencilDbName));
+	if (!stencilDatablock)
+	{
+		stencilDatablock = static_cast<Ogre::HlmsUnlitDatablock*>(
+			mHlms->createDatablock(
+				stencilDbName,
+				stencilDbName,
+				mMacroblock,
+				stencilBlendblock,
+				Ogre::HlmsParamVec()));
+	}
+	mFrameData.stencilMaterial = Material{ nullptr, stencilDatablock };
+	mFrameData.stencilMaterial.calculateHlmsHash();
+
+	// Градиентные шейдеры
+	AddShaderMaker("linear-gradient", std::make_unique<LinearGradientMaker>());
+	AddShaderMaker("radial-gradient", std::make_unique<RadialGradientMaker>());
+	AddShaderMaker("conic-gradient", std::make_unique<ConicGradientMaker>());
+	mShaders.insert({});
 }
 
 void RenderInterface::releaseBufferedGeometries()
 {
-	Ogre::Root& root = Ogre::Root::getSingleton();
-	Ogre::RenderSystem* renderSystem = root.getRenderSystem();
-	Ogre::VaoManager* vaoManager = renderSystem->getVaoManager();
+	Ogre::VaoManager* vaoManager = Ogre::Root::getSingleton()
+		.getRenderSystem()
+		->getVaoManager();
 
-	for(Rml::CompiledGeometryHandle geometry : this->releaseGeometries)
+	for (Rml::CompiledGeometryHandle geometry : mReleaseGeometries)
 	{
 		auto* vao = reinterpret_cast<Ogre::VertexArrayObject*>(geometry);
-
-		for(auto* buffer : vao->getVertexBuffers())
+		for (auto* buffer : vao->getVertexBuffers())
 			vaoManager->destroyVertexBuffer(buffer);
 
-		if(vao->getIndexBuffer())
+		if (vao->getIndexBuffer())
 			vaoManager->destroyIndexBuffer(vao->getIndexBuffer());
 		vaoManager->destroyVertexArrayObject(vao);
 	}
-	this->releaseGeometries.clear();
+	mReleaseGeometries.clear();
 }
 
 void RenderInterface::releaseBufferedTextures()
 {
-	Ogre::TextureGpuManager& textureManager = *Ogre::Root::getSingleton().getRenderSystem()
+	Ogre::TextureGpuManager& textureManager = *Ogre::Root::getSingleton()
+		.getRenderSystem()
 		->getTextureGpuManager();
 
-	for(Rml::TextureHandle texture : this->releaseTextures)
+	for (Rml::TextureHandle texture : mReleaseTextures)
 	{
-		auto& material = this->materials.at(texture);
+		auto& material = mMaterials.at(texture);
 		auto* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(material.datablock);
 		auto* textureGpu = datablock->getTexture(0);
 
 		assert(datablock->getLinkedRenderables().empty());
 
-		this->hlms->destroyDatablock(datablock->getName());
-		if(!this->workspace.freeRenderTexture(textureGpu))
+		mHlms->destroyDatablock(datablock->getName());
+		if (textureGpu)
 			textureManager.destroyTexture(textureGpu);
 
-		this->materials.erase(texture);
+		mMaterials.erase(texture);
 	}
-	this->releaseTextures.clear();
-
-	for(Ogre::TextureGpu* texture : this->releaseRenderTextures)
-		this->workspace.freeRenderTexture(texture);
-	this->releaseRenderTextures.clear();
+	mReleaseTextures.clear();
 }
 
-Layer RenderInterface::getLayerBuffer(int index)
+void RenderInterface::AddShaderMaker(Rml::String name, std::unique_ptr<ShaderMaker> shaderMaker)
 {
-	if(index < 0)
-		index += this->numActiveLayers;
-
-	if(index >= static_cast<int>(this->layerBuffers.size()))
-		throw std::out_of_range("Layer buffer index out of range");
-
-	return this->layerBuffers[index].take();
+	mShaderMakers.emplace(std::move(name), std::move(shaderMaker));
 }
-void RenderInterface::putLayerBuffer(int index, Layer layer)
-{
-	if(index < 0)
-		index += this->numActiveLayers;
-
-	if(index >= static_cast<int>(this->layerBuffers.size()))
-		throw std::out_of_range("Layer buffer index out of range");
-
-	this->layerBuffers[index] = layer;
-}
-Layer RenderInterface::acquireLayerBuffer()
-{
-	if(this->numActiveLayers == static_cast<int>(this->layerBuffers.size()))
-	{
-		Layer layer{this->addConnection(), -1};
-		this->layerBuffers.push_back(layer);
-		this->passes.push_back(NewBufferPass(layer.connectionId));
-	}
-
-	++this->numActiveLayers;
-	return this->getLayerBuffer(-1);
-}
-void RenderInterface::releaseLayerBuffer(Layer layer)
-{
-	this->putLayerBuffer(-1, layer);
-	--this->numActiveLayers;
-}
-
 
 void RenderInterface::BeginFrame()
 {
-	this->workspace.clearAll();
-	this->releaseBufferedGeometries();
-	this->releaseBufferedTextures();
+	releaseBufferedGeometries();
+	releaseBufferedTextures();
 
-	this->numActiveLayers = 1;
-	this->layerBuffers.push_back(Layer{-1, -1});
+	mFrameData.clear();
+	mCurrentScissor = {};
+	mCurrentTransform = Ogre::Matrix4::IDENTITY;
+	mStencilEnabled = false;
+	mStencilRef = 0;
 }
 
 void RenderInterface::EndFrame()
 {
-	this->workspace.populateWorkspace(this->passes);
-
-	this->passes.clear();
-	this->layerBuffers.clear();
-	this->numActiveLayers = 0;
-	this->renderPassSettings = RenderPassSettings{};
-	this->connectionId = 0;
+	// Команды уже записаны в mFrameData; CompositorPassRml исполнит их синхронно.
 }
-
-
-void RenderInterface::AddFilterMaker(Rml::String name, std::unique_ptr<FilterMaker> filterMaker)
-{
-	this->filterMakers.emplace(std::move(name), std::move(filterMaker));
-}
-void RenderInterface::AddShaderMaker(Rml::String name, std::unique_ptr<ShaderMaker> shaderMaker)
-{
-	this->shaderMakers.emplace(std::move(name), std::move(shaderMaker));
-}
-
-
-void RenderInterface::addPass(Pass&& pass)
-{
-	this->passes.push_back(std::move(pass));
-}
-void RenderInterface::releaseRenderTexture(Ogre::TextureGpu* texture)
-{
-	this->releaseRenderTextures.push_back(texture);
-}
-
 
 Rml::CompiledGeometryHandle RenderInterface::CompileGeometry(
 	Rml::Span<const Rml::Vertex> vertices,
@@ -216,33 +153,34 @@ Rml::CompiledGeometryHandle RenderInterface::CompileGeometry(
 {
 	return reinterpret_cast<Rml::CompiledGeometryHandle>(create_vao(vertices, indices));
 }
+
 void RenderInterface::RenderGeometry(
 	Rml::CompiledGeometryHandle geometry,
 	Rml::Vector2f translation,
 	Rml::TextureHandle texture)
 {
-	BaseRenderPass* pass = nullptr;
-	if(this->renderPassSettings.enableStencil)
-		pass = &this->getRenderPass<RenderWithStencilPass>();
-	else
-		pass = &this->getRenderPass<RenderPass>();
-
-	auto& material = this->materials.at(texture);
-	if(material.needsHashing())
+	auto& material = mMaterials.at(texture);
+	if (material.needsHashing())
 		material.calculateHlmsHash();
-	pass->queue.push_back({
-		reinterpret_cast<Ogre::VertexArrayObject*>(geometry),
-		translation,
-		material
-	});
-	if(material.textureDependency)
-		pass->textureDependencies.push_back(material.textureDependency);
+
+	mFrameData.commands.push_back(DrawCmd{
+		.vao = reinterpret_cast<Ogre::VertexArrayObject*>(geometry),
+		.material = material,
+		.transform = mCurrentTransform,
+		.translation = translation,
+		.scissor = mCurrentScissor,
+		.stencilMode = mStencilEnabled ? StencilMode::TestEqual : StencilMode::Disabled,
+		.stencilRef = mStencilRef
+		});
+
+	if (material.textureDependency)
+		mFrameData.textureDependencies.push_back(material.textureDependency);
 }
+
 void RenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle geometry)
 {
-	this->releaseGeometries.push_back(geometry);
+	mReleaseGeometries.push_back(geometry);
 }
-
 
 Rml::TextureHandle RenderInterface::LoadTexture(
 	Rml::Vector2i& texture_dimensions,
@@ -252,7 +190,7 @@ Rml::TextureHandle RenderInterface::LoadTexture(
 		.getRenderSystem()
 		->getTextureGpuManager();
 	Ogre::TextureGpu* texture = nullptr;
-	if(!source.empty())
+	if (!source.empty())
 	{
 		texture = textureManager->createTexture(
 			source,
@@ -264,36 +202,42 @@ Rml::TextureHandle RenderInterface::LoadTexture(
 		texture->scheduleTransitionTo(Ogre::GpuResidency::Resident);
 	}
 
-	if(!texture)
+	if (!texture)
 		return Rml::TextureHandle{};
 
 	texture->waitForMetadata();
 	texture_dimensions = Rml::Vector2i(texture->getWidth(), texture->getHeight());
 
-	Ogre::String id = this->workspace.getNameStr();
+	Ogre::String id = mName;
 	id.append("_Texture_");
-	id.append(std::to_string(this->datablockId++));
+	id.append(std::to_string(mDatablockId++));
 	auto* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(
-		this->hlms->createDatablock(id, id, this->macroblock, this->blendblock, Ogre::HlmsParamVec()));
-	datablock->setTexture(0, texture, &this->samplerblock);
+		mHlms->createDatablock(id, id, mMacroblock, mBlendblock, Ogre::HlmsParamVec()));
+	datablock->setTexture(0, texture, &mSamplerblock);
 	datablock->setUseColour(true);
 
-	auto material = Material{nullptr, datablock};
+	Material material{ nullptr, datablock };
 	material.calculateHlmsHash();
-	auto handle = this->materials.insert(std::move(material));
-	return handle;
+	return mMaterials.insert(std::move(material));
 }
+
 Rml::TextureHandle RenderInterface::GenerateTexture(
 	Rml::Span<const Rml::byte> source,
 	Rml::Vector2i source_dimensions)
 {
-	Ogre::String id = this->workspace.getNameStr();
+	Ogre::String id = mName;
 	id.append("_Texture_");
-	id.append(std::to_string(this->datablockId++));
+	id.append(std::to_string(mDatablockId++));
 
-	std::size_t size = Ogre::PixelFormatGpuUtils::calculateSizeBytes(
-        source_dimensions.x, source_dimensions.y, 1u, 1u, Ogre::PixelFormatGpu::PFG_RGBA8_UNORM_SRGB, 1u, 4u);
-	Ogre::uint8* data = reinterpret_cast<Ogre::uint8*>(
+	const std::size_t size = Ogre::PixelFormatGpuUtils::calculateSizeBytes(
+		source_dimensions.x,
+		source_dimensions.y,
+		1u,
+		1u,
+		Ogre::PixelFormatGpu::PFG_RGBA8_UNORM_SRGB,
+		1u,
+		4u);
+	auto* data = reinterpret_cast<Ogre::uint8*>(
 		OGRE_MALLOC_SIMD(size, Ogre::MEMCATEGORY_GENERAL));
 	std::copy(source.begin(), source.end(), data);
 
@@ -308,7 +252,8 @@ Rml::TextureHandle RenderInterface::GenerateTexture(
 		true,
 		1u);
 
-	Ogre::TextureGpuManager& textureManager = *Ogre::Root::getSingleton().getRenderSystem()
+	Ogre::TextureGpuManager& textureManager = *Ogre::Root::getSingleton()
+		.getRenderSystem()
 		->getTextureGpuManager();
 	Ogre::TextureGpu* texture = textureManager.createTexture(
 		id,
@@ -319,348 +264,178 @@ Rml::TextureHandle RenderInterface::GenerateTexture(
 	texture->setNumMipmaps(1);
 	texture->setResolution(source_dimensions.x, source_dimensions.y);
 	texture->setPixelFormat(Ogre::PixelFormatGpu::PFG_RGBA8_UNORM);
-
 	texture->scheduleTransitionTo(Ogre::GpuResidency::Resident, image);
 
 	auto* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(
-		this->hlms->createDatablock(id, id, this->macroblock, this->blendblock, Ogre::HlmsParamVec()));
-	datablock->setTexture(0, texture, &this->samplerblock);
+		mHlms->createDatablock(id, id, mMacroblock, mBlendblock, Ogre::HlmsParamVec()));
+	datablock->setTexture(0, texture, &mSamplerblock);
 	datablock->setUseColour(true);
 
-	auto material = Material{nullptr, datablock};
+	Material material{ nullptr, datablock };
 	material.calculateHlmsHash();
-	auto handle = this->materials.insert(std::move(material));
-	return handle;
-}
-void RenderInterface::ReleaseTexture(Rml::TextureHandle texture)
-{
-	this->releaseTextures.push_back(texture);
+	return mMaterials.insert(std::move(material));
 }
 
+void RenderInterface::ReleaseTexture(Rml::TextureHandle texture)
+{
+	mReleaseTextures.push_back(texture);
+}
 
 void RenderInterface::EnableScissorRegion(bool enable)
 {
-	this->renderPassSettings.enableScissor = enable;
-}
-void RenderInterface::SetScissorRegion(Rml::Rectanglei region)
-{
-	this->renderPassSettings.scissorRegion = region;
+	mCurrentScissor.enabled = enable;
 }
 
+void RenderInterface::SetScissorRegion(Rml::Rectanglei region)
+{
+	mCurrentScissor.region = region;
+}
 
 void RenderInterface::SetTransform(const Rml::Matrix4f* transform)
 {
-	this->renderPassSettings.transform = transform
+	mCurrentTransform = transform
 		? Ogre::Matrix4(transform->data()).transpose()
 		: Ogre::Matrix4::IDENTITY;
 }
 
-
 void RenderInterface::EnableClipMask(bool enable)
 {
-	this->renderPassSettings.enableStencil = enable;
+	mStencilEnabled = enable;
 }
+
 void RenderInterface::RenderToClipMask(
 	Rml::ClipMaskOperation operation,
 	Rml::CompiledGeometryHandle geometry,
 	Rml::Vector2f translation)
 {
-	switch(operation)
-	{
-	case Rml::ClipMaskOperation::Set:
-		this->renderPassSettings.stencilRefValue = 1;
-		break;
-	case Rml::ClipMaskOperation::SetInverse:
-		this->renderPassSettings.stencilRefValue = 0;
-		break;
-	case Rml::ClipMaskOperation::Intersect:
-		++this->renderPassSettings.stencilRefValue;
-		break;
-	}
+	auto* vao = reinterpret_cast<Ogre::VertexArrayObject*>(geometry);
 
-	switch(operation)
+	switch (operation)
 	{
 	case Rml::ClipMaskOperation::Set:
-		this->getRenderPass<RenderToStencilSetPass>().queue.push_back({
-			reinterpret_cast<Ogre::VertexArrayObject*>(geometry),
-			translation,
-			this->materials[0]
-		});
+		mStencilRef = 1u;
+		mFrameData.commands.push_back(ClearStencilCmd{ 0u });
+		mFrameData.commands.push_back(DrawCmd{
+			.vao = vao,
+			.material = mFrameData.stencilMaterial,
+			.transform = mCurrentTransform,
+			.translation = translation,
+			.scissor = mCurrentScissor,
+			.stencilMode = StencilMode::WriteSet,
+			.stencilRef = 1u
+			});
 		break;
-	case Rml::ClipMaskOperation::SetInverse:
-		this->getRenderPass<RenderToStencilSetInversePass>().queue.push_back({
-			reinterpret_cast<Ogre::VertexArrayObject*>(geometry),
-			translation,
-			this->materials[0]
-		});
-		break;
-	case Rml::ClipMaskOperation::Intersect:
-		this->getRenderPass<RenderToStencilIntersectPass>().queue.push_back({
-			reinterpret_cast<Ogre::VertexArrayObject*>(geometry),
-			translation,
-			this->materials[0]
-		});
-		break;
-	}
 
-	switch(operation)
-	{
-	case Rml::ClipMaskOperation::Set:
-		break;
 	case Rml::ClipMaskOperation::SetInverse:
-		this->renderPassSettings.stencilRefValue = 1;
+		mFrameData.commands.push_back(ClearStencilCmd{ 1u });
+		mFrameData.commands.push_back(DrawCmd{
+			.vao = vao,
+			.material = mFrameData.stencilMaterial,
+			.transform = mCurrentTransform,
+			.translation = translation,
+			.scissor = mCurrentScissor,
+			.stencilMode = StencilMode::WriteSetInverse,
+			.stencilRef = 0u
+			});
+		mStencilRef = 1u;
 		break;
+
 	case Rml::ClipMaskOperation::Intersect:
+		++mStencilRef;
+		mFrameData.commands.push_back(DrawCmd{
+			.vao = vao,
+			.material = mFrameData.stencilMaterial,
+			.transform = mCurrentTransform,
+			.translation = translation,
+			.scissor = mCurrentScissor,
+			.stencilMode = StencilMode::WriteIntersect,
+			.stencilRef = mStencilRef
+			});
 		break;
 	}
 }
 
+// --- Заглушки Этапа 2 ---
 
 Rml::LayerHandle RenderInterface::PushLayer()
 {
-	Layer oldTopLayer{this->addConnection(), -1};
-	this->putLayerBuffer(-1, oldTopLayer);
-	Layer newLayer = this->acquireLayerBuffer();
-	this->passes.push_back(SwapPass(newLayer.connectionId, oldTopLayer.connectionId));
-	this->passes.push_back(StartLayerPass{});
-
-	return Rml::LayerHandle(this->numActiveLayers - 1);
+	return 0;
 }
+
 void RenderInterface::CompositeLayers(
-	Rml::LayerHandle source,
-	Rml::LayerHandle destination,
-	Rml::BlendMode blend_mode,
-	Rml::Span<const Rml::CompiledFilterHandle> filters)
+	Rml::LayerHandle /*source*/,
+	Rml::LayerHandle /*destination*/,
+	Rml::BlendMode /*blend_mode*/,
+	Rml::Span<const Rml::CompiledFilterHandle> /*filters*/)
 {
-	Layer topLayer{this->addConnection(), -1};
-	Layer sourceLayer;
-	Layer destinationLayer;
-
-	bool sourceIsTopLayer = static_cast<int>(source) == this->numActiveLayers - 1;
-	bool destinationIsTopLayer = static_cast<int>(destination) == this->numActiveLayers - 1;
-
-	Layer tempLayer = this->acquireLayerBuffer();
-	if(sourceIsTopLayer)
-	{
-		topLayer.copyPass = this->passes.size();
-		this->passes.push_back(CopyPass(tempLayer.connectionId, topLayer.connectionId));
-	}
-	else
-	{
-		this->passes.push_back(SwapPass(this->getLayerBuffer(source).connectionId, topLayer.connectionId));
-		sourceLayer = Layer{this->addConnection(), static_cast<int>(this->passes.size())};
-		this->passes.push_back(CopyPass(tempLayer.connectionId, sourceLayer.connectionId));
-	}
-
-	if(destinationIsTopLayer)
-	{
-		destinationLayer = topLayer;
-		topLayer = Layer{};
-	}
-	else if(source == destination)
-	{
-		destinationLayer = sourceLayer;
-		sourceLayer = Layer{};
-	}
-	else
-		destinationLayer = this->layerBuffers.at(destination);
-
-	// Change source layer to copy (if destination != source)
-	if(!sourceLayer.isTaken())
-		this->putLayerBuffer(source, sourceLayer);
-
-
-	for(auto filter : filters)
-		this->filters.at(filter)->apply(*this);
-
-
-	tempLayer = Layer{this->addConnection(), -1};
-	if(this->renderPassSettings.enableStencil)
-	{
-		this->passes.push_back(CompositeWithStencilPass(
-			destinationLayer.connectionId,
-			tempLayer.connectionId,
-			blend_mode == Rml::BlendMode::Replace,
-			this->renderPassSettings));
-	}
-	else
-	{
-		this->passes.push_back(CompositePass(
-			destinationLayer.connectionId,
-			tempLayer.connectionId,
-			blend_mode == Rml::BlendMode::Replace,
-			this->renderPassSettings));
-	}
-	this->releaseLayerBuffer(tempLayer);
-
-	if(!destinationIsTopLayer)
-	{
-		destinationLayer = Layer{this->addConnection(), static_cast<int>(this->passes.size())};
-		this->passes.push_back(SwapPass(topLayer.connectionId, destinationLayer.connectionId));
-		this->putLayerBuffer(destination, destinationLayer);
-		this->putLayerBuffer(-1, Layer{-1, topLayer.copyPass});
-	}
 }
+
 void RenderInterface::PopLayer()
 {
-	Layer poppedLayer = this->getLayerBuffer(-1);
-	Layer newTopLayer = this->getLayerBuffer(-2);
-	auto* lastPass = std::get_if<SwapPass>(&this->passes.back());
-	if(lastPass)
-	{
-		CopyPass* copyPass = nullptr;
-		if(poppedLayer.copyPass != -1)
-			copyPass = std::get_if<CopyPass>(&this->passes[poppedLayer.copyPass]);
-		if(copyPass && lastPass->swapIn == copyPass->copyOut)
-		{
-			this->releaseLayerBuffer(Layer{copyPass->copyIn, -1});
-			this->passes[poppedLayer.copyPass] = NullPass{};
-			if(newTopLayer.connectionId == lastPass->swapOut)
-				this->passes.pop_back();
-			else
-				this->passes.back() = SwapPass(newTopLayer.connectionId, lastPass->swapOut);
-		}
-		else
-		{
-			this->releaseLayerBuffer(Layer{lastPass->swapIn, -1});
-			if(newTopLayer.connectionId == lastPass->swapOut)
-				this->passes.pop_back();
-			else
-				this->passes.back() = SwapPass(newTopLayer.connectionId, lastPass->swapOut);
-		}
-	}
-	else
-	{
-		Layer poppedLayer{this->addConnection(), -1};
-		this->releaseLayerBuffer(poppedLayer);
-		this->passes.push_back(SwapPass{newTopLayer.connectionId, poppedLayer.connectionId});
-	}
 }
-
 
 Rml::CompiledFilterHandle RenderInterface::CompileFilter(
-	const Rml::String& name,
-	const Rml::Dictionary& parameters)
+	const Rml::String& /*name*/,
+	const Rml::Dictionary& /*parameters*/)
 {
-	auto maker = this->filterMakers.find(name);
-	if(maker == this->filterMakers.end())
-			return {};
-
-	auto filter = maker->second->make(parameters);
-	auto handle = this->filters.insert(std::move(filter));
-	return handle;
-}
-void RenderInterface::ReleaseFilter(Rml::CompiledFilterHandle filter)
-{
-	auto& compiledFilter = this->filters.at(filter);
-	compiledFilter->release(*this);
-	this->filters.erase(filter);
+	return {};
 }
 
+void RenderInterface::ReleaseFilter(Rml::CompiledFilterHandle /*filter*/)
+{
+}
 
 Rml::TextureHandle RenderInterface::SaveLayerAsTexture()
 {
-	Rml::Vector2i dimensions;
-	if(this->renderPassSettings.enableScissor)
-		dimensions = this->renderPassSettings.scissorRegion.Size();
-	else
-		dimensions = Rml::Vector2i{
-			int(this->workspace.width()),
-			int(this->workspace.height())
-		};
-
-	auto renderTexture = this->workspace.getRenderTexture();
-	Ogre::TextureGpu* texture = renderTexture.first;
-	// This looks wrong but it works?
-	// Don't want to invalidate texture pointer so don't recreate texture
-	texture->scheduleTransitionTo(Ogre::GpuResidency::OnStorage);
-	texture->setResolution(dimensions.x, dimensions.y);
-	texture->scheduleTransitionTo(Ogre::GpuResidency::Resident);
-
-	Ogre::String id = this->workspace.getNameStr();
-	id.append("_Texture_");
-	id.append(std::to_string(this->datablockId++));
-	auto* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(
-		this->hlms->createDatablock(id, id, this->macroblock, this->blendblock, Ogre::HlmsParamVec()));
-	datablock->setTexture(0, texture);
-	datablock->setUseColour(true);
-
-	this->passes.push_back(RenderToTexturePass(renderTexture.second, this->renderPassSettings));
-
-	auto material = Material{nullptr, datablock, texture};
-	material.calculateHlmsHash();
-	auto handle = this->materials.insert(std::move(material));
-	return handle;
+	return {};
 }
 
 Rml::CompiledFilterHandle RenderInterface::SaveLayerAsMaskImage()
 {
-	Rml::Vector2i dimensions;
-	if(this->renderPassSettings.enableScissor)
-		dimensions = this->renderPassSettings.scissorRegion.Size();
-	else
-		dimensions = Rml::Vector2i{
-			int(this->workspace.width()),
-			int(this->workspace.height())
-		};
-
-	auto renderTexture = this->workspace.getRenderTexture();
-	Ogre::TextureGpu* texture = renderTexture.first;
-	// This looks wrong but it works?
-	// Don't want to invalidate texture pointer so don't recreate texture
-	texture->scheduleTransitionTo(Ogre::GpuResidency::OnStorage);
-	texture->setResolution(dimensions.x, dimensions.y);
-	texture->scheduleTransitionTo(Ogre::GpuResidency::Resident);
-
-	this->passes.push_back(RenderToTexturePass(
-		renderTexture.second,
-		this->renderPassSettings));
-
-	auto filter = this->maskImageFilterMaker.make(texture);
-	auto handle = this->filters.insert(std::make_unique<SingleMaterialFilter>(filter));
-	return handle;
+	return {};
 }
 
+// --- Шейдеры (градиенты) ---
 
 Rml::CompiledShaderHandle RenderInterface::CompileShader(
 	const Rml::String& name,
 	const Rml::Dictionary& parameters)
 {
-	auto maker = this->shaderMakers.find(name);
-	if(maker == this->shaderMakers.end())
+	auto maker = mShaderMakers.find(name);
+	if (maker == mShaderMakers.end())
 		return {};
 
 	auto shader = maker->second->make(parameters);
-	shader->setMacroblock(this->macroblock);
-	shader->setBlendblock(this->blendblock);
-	auto material = Material{shader};
+	shader->setMacroblock(mMacroblock);
+	shader->setBlendblock(mBlendblock);
+
+	Material material{ shader };
 	material.calculateHlmsHash();
-	auto handle = this->shaders.insert(std::move(material));
-	return handle;
+	return mShaders.insert(std::move(material));
 }
+
 void RenderInterface::RenderShader(
 	Rml::CompiledShaderHandle shader,
 	Rml::CompiledGeometryHandle geometry,
 	Rml::Vector2f translation,
-	Rml::TextureHandle texture)
+	Rml::TextureHandle /*texture*/)
 {
-	auto& material = this->shaders.at(shader);
-	if(material.needsHashing())
+	auto& material = mShaders.at(shader);
+	if (material.needsHashing())
 		material.calculateHlmsHash();
 
-	std::vector<QueuedGeometry>* queue = nullptr;
-	if(this->renderPassSettings.enableStencil)
-		queue = &this->getRenderPass<RenderWithStencilPass>().queue;
-	else
-		queue = &this->getRenderPass<RenderPass>().queue;
-
-	queue->push_back({
-		reinterpret_cast<Ogre::VertexArrayObject*>(geometry),
-		translation,
-		material
-	});
+	mFrameData.commands.push_back(DrawCmd{
+		.vao = reinterpret_cast<Ogre::VertexArrayObject*>(geometry),
+		.material = material,
+		.transform = mCurrentTransform,
+		.translation = translation,
+		.scissor = mCurrentScissor,
+		.stencilMode = mStencilEnabled ? StencilMode::TestEqual : StencilMode::Disabled,
+		.stencilRef = mStencilRef
+		});
 }
+
 void RenderInterface::ReleaseShader(Rml::CompiledShaderHandle shader)
 {
-	this->shaders.erase(shader);
+	mShaders.erase(shader);
 }

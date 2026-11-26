@@ -32,10 +32,17 @@ void Material::calculateHlmsHash()
 {
 	static RenderObject emptyRenderObject = make_empty_render_object();
 
-	if(this->material)
+	if (this->material)
 	{
 		this->material->load();
 		this->datablock = this->material->getTechnique(0)->getPass(0)->_getDatablock();
+		emptyRenderObject.mMaterial = this->material;
+		emptyRenderObject.mLodMaterial = this->material->_getLodValues();
+	}
+	else
+	{
+		emptyRenderObject.mMaterial.reset();
+		emptyRenderObject.mLodMaterial = &Ogre::MovableObject::c_DefaultLodMesh;
 	}
 	emptyRenderObject.mMaterial = this->material;
 	emptyRenderObject.mLodMaterial = this->material->_getLodValues();

@@ -2,6 +2,10 @@
 
 project(RmlOgre VERSION 0.1 LANGUAGES CXX)
 
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF) # Использовать чистый стандарт (-std=c++20 вместо -std=gnu++20)
+
 option(BUILD_EXAMPLE "Build example executable" OFF)
 option(BUILD_TESTS "Build tests executables" OFF)
 
@@ -44,17 +48,19 @@ target_sources(RmlOgre
 		src/RmlOgre/Compositor/CompositorPassGeometry.cpp
 		src/RmlOgre/Compositor/CompositorPassRenderQuad.cpp
 		src/RmlOgre/Compositor/CompositorPassRenderQuadDef.cpp
+		src/RmlOgre/Compositor/CompositorPassRml.cpp
 		src/RmlOgre/BaseRenderPass.cpp
-		src/RmlOgre/FilterMaker.cpp
+		#src/RmlOgre/FilterMaker.cpp
 		src/RmlOgre/Material.cpp
 		src/RmlOgre/NodeConnectionMap.cpp
 		src/RmlOgre/Pass.cpp
 		src/RmlOgre/RenderInterface.cpp
 		src/RmlOgre/RenderObject.cpp
-		src/RmlOgre/Workspace.cpp
-		src/RmlOgre/filters.cpp
+		#src/RmlOgre/Workspace.cpp
+		#src/RmlOgre/filters.cpp
 		src/RmlOgre/geometry.cpp
 		src/RmlOgre/shaders.cpp
+		
 )
 
 target_link_libraries(RmlOgre

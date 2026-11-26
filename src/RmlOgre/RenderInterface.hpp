@@ -1,190 +1,147 @@
 #ifndef NIMBLE_RMLOGRE_RENDERINTERFACE_HPP
 #define NIMBLE_RMLOGRE_RENDERINTERFACE_HPP
 
-#include "FilterMaker.hpp"
 #include "Material.hpp"
 #include "ObjectIndex.hpp"
+#include "RmlCommandBuffer.hpp"
 #include "ShaderMaker.hpp"
-#include "Workspace.hpp"
-#include "filters.hpp"
 
 #include <OgreHlmsDatablock.h>
 #include <OgreHlmsSamplerblock.h>
+#include <OgreMatrix4.h>
+#include <OgreString.h>
 
 #include <RmlUi/Core/RenderInterface.h>
 
+#include <memory>
+#include <unordered_map>
+#include <vector>
 
 namespace Ogre {
 
-class HlmsUnlit;
-class HlmsUnlitDatablock;
-class SceneManager;
-class TextureGpu;
+	class HlmsUnlit;
+	class HlmsUnlitDatablock;
+	class SceneManager;
+	class TextureGpu;
 
 }
 
 namespace nimble::RmlOgre {
 
-struct Layer
-{
-	int connectionId = -1;
-	int copyPass = -1;
-
-	Layer take()
+	class RenderInterface : public Rml::RenderInterface
 	{
-		Layer self = *this;
-		this->connectionId = -1;
-		return self;
-	}
-	bool isTaken() const
-	{
-		return this->connectionId == -1;
-	}
-};
+		Ogre::String mName;
 
-class RenderInterface : public Rml::RenderInterface
-{
-	Ogre::HlmsUnlit* hlms = nullptr;
-	Ogre::HlmsMacroblock macroblock;
-	Ogre::HlmsBlendblock blendblock;
-	Ogre::HlmsSamplerblock samplerblock;
-	ObjectIndex<Material> materials;
+		Ogre::HlmsUnlit* mHlms = nullptr;
+		Ogre::HlmsMacroblock mMacroblock;
+		Ogre::HlmsBlendblock mBlendblock;
+		Ogre::HlmsSamplerblock mSamplerblock;
 
-	std::unordered_map<Rml::String, std::unique_ptr<FilterMaker>> filterMakers;
-	MaskImageFilterMaker maskImageFilterMaker;
-	ObjectIndex<std::unique_ptr<Filter>> filters;
+		ObjectIndex<Material> mMaterials;
+		std::unordered_map<Rml::String, std::unique_ptr<ShaderMaker>> mShaderMakers;
+		ObjectIndex<Material> mShaders;
 
-	std::unordered_map<Rml::String, std::unique_ptr<ShaderMaker>> shaderMakers;
-	ObjectIndex<Material> shaders;
+		// Текущее состояние записи команд кадра
+		ScissorState mCurrentScissor{};
+		Ogre::Matrix4 mCurrentTransform = Ogre::Matrix4::IDENTITY;
+		bool mStencilEnabled = false;
+		Ogre::uint32 mStencilRef = 0;
 
-	RenderPassSettings renderPassSettings;
-	int connectionId = 0;
-	std::vector<Layer> layerBuffers;
-	int numActiveLayers = 0;
-	Passes passes;
+		RmlFrameData mFrameData{};
 
-	int datablockId = 0;
-	std::vector<Rml::CompiledGeometryHandle> releaseGeometries;
-	std::vector<Rml::TextureHandle> releaseTextures;
-	std::vector<Ogre::TextureGpu*> releaseRenderTextures;
+		int mDatablockId = 0;
+		std::vector<Rml::CompiledGeometryHandle> mReleaseGeometries;
+		std::vector<Rml::TextureHandle> mReleaseTextures;
 
-	Workspace workspace;
+		void releaseBufferedGeometries();
+		void releaseBufferedTextures();
 
-	void releaseBufferedGeometries();
-	void releaseBufferedTextures();
+	public:
+		explicit RenderInterface(Ogre::String name);
 
-	template <class TRenderPass>
-	TRenderPass& getRenderPass()
-	{
-		TRenderPass* lastPass = nullptr;
-		if(!this->passes.empty())
-			lastPass = std::get_if<TRenderPass>(&this->passes.back());
-		if(!lastPass || lastPass->settings != this->renderPassSettings)
+		// Временный конструктор совместимости для старых вызовов (UiSurface / тесты)
+		RenderInterface(
+			const Ogre::String& name,
+			Ogre::SceneManager* /*sceneManager*/,
+			Ogre::TextureGpu* /*output*/,
+			Ogre::TextureGpu* /*background*/ = nullptr)
+			: RenderInterface(name)
 		{
-			TRenderPass newPass;
-			newPass.settings = this->renderPassSettings;
-			this->passes.push_back(std::move(newPass));
-			lastPass = &std::get<TRenderPass>(this->passes.back());
 		}
 
-		return *lastPass;
-	}
+		const Ogre::String& getName() const noexcept { return mName; }
+		const RmlFrameData& frameData() const noexcept { return mFrameData; }
 
-public:
-	RenderInterface(
-		const Ogre::String& name,
-		Ogre::SceneManager* sceneManager,
-		Ogre::TextureGpu* output,
-		Ogre::TextureGpu* background = nullptr);
+		void AddShaderMaker(Rml::String name, std::unique_ptr<ShaderMaker> shaderMaker);
 
+		void BeginFrame();
+		void EndFrame();
 
-	int addConnection() { return this->connectionId++; }
-	Layer getLayerBuffer(int index);
-	void putLayerBuffer(int index, Layer id);
-	Layer acquireLayerBuffer();
-	void releaseLayerBuffer(Layer id);
+		Rml::CompiledGeometryHandle CompileGeometry(
+			Rml::Span<const Rml::Vertex> vertices,
+			Rml::Span<const int> indices
+		) override;
+		void RenderGeometry(
+			Rml::CompiledGeometryHandle geometry,
+			Rml::Vector2f translation,
+			Rml::TextureHandle texture
+		) override;
+		void ReleaseGeometry(Rml::CompiledGeometryHandle geometry) override;
 
-	const RenderPassSettings& currentRenderPassSettings() const { return this->renderPassSettings; }
-	void addPass(Pass&& pass);
-	void releaseRenderTexture(Ogre::TextureGpu* texture);
+		Rml::TextureHandle LoadTexture(
+			Rml::Vector2i& texture_dimensions,
+			const Rml::String& source
+		) override;
+		Rml::TextureHandle GenerateTexture(
+			Rml::Span<const Rml::byte> source,
+			Rml::Vector2i source_dimensions
+		) override;
+		void ReleaseTexture(Rml::TextureHandle texture) override;
 
+		void EnableScissorRegion(bool enable) override;
+		void SetScissorRegion(Rml::Rectanglei region) override;
 
-	void AddFilterMaker(Rml::String name, std::unique_ptr<FilterMaker> filterMaker);
-	void AddShaderMaker(Rml::String name, std::unique_ptr<ShaderMaker> shaderMaker);
+		void SetTransform(const Rml::Matrix4f* transform) override;
 
-	Ogre::TextureGpu* GetOutput() const       { return this->workspace.output(); }
-	void SetOutput(Ogre::TextureGpu* texture) { this->workspace.output(texture); }
-	Ogre::TextureGpu* GetBackground() const       { return this->workspace.background(); }
-	void SetBackground(Ogre::TextureGpu* texture) { this->workspace.background(texture); }
+		void EnableClipMask(bool enable) override;
+		void RenderToClipMask(
+			Rml::ClipMaskOperation operation,
+			Rml::CompiledGeometryHandle geometry,
+			Rml::Vector2f translation
+		) override;
 
+		// Заглушки Этапа 2 (слои и фильтры)
+		Rml::LayerHandle PushLayer() override;
+		void CompositeLayers(
+			Rml::LayerHandle source,
+			Rml::LayerHandle destination,
+			Rml::BlendMode blend_mode,
+			Rml::Span<const Rml::CompiledFilterHandle> filters
+		) override;
+		void PopLayer() override;
 
-	void BeginFrame();
-	void EndFrame();
+		Rml::CompiledFilterHandle CompileFilter(
+			const Rml::String& name,
+			const Rml::Dictionary& parameters
+		) override;
+		void ReleaseFilter(Rml::CompiledFilterHandle filter) override;
 
-	Rml::CompiledGeometryHandle CompileGeometry(
-		Rml::Span<const Rml::Vertex> vertices,
-		Rml::Span<const int> indices
-	) override;
-	void RenderGeometry(
-		Rml::CompiledGeometryHandle geometry,
-		Rml::Vector2f translation,
-		Rml::TextureHandle texture
-	) override;
-	void ReleaseGeometry(Rml::CompiledGeometryHandle geometry) override;
+		Rml::TextureHandle SaveLayerAsTexture() override;
+		Rml::CompiledFilterHandle SaveLayerAsMaskImage() override;
 
-	Rml::TextureHandle LoadTexture(
-		Rml::Vector2i& texture_dimensions,
-		const Rml::String& source
-	) override;
-	Rml::TextureHandle GenerateTexture(
-		Rml::Span<const Rml::byte> source,
-		Rml::Vector2i source_dimensions
-	) override;
-	void ReleaseTexture(Rml::TextureHandle texture) override;
+		Rml::CompiledShaderHandle CompileShader(
+			const Rml::String& name,
+			const Rml::Dictionary& parameters
+		) override;
+		void RenderShader(
+			Rml::CompiledShaderHandle shader,
+			Rml::CompiledGeometryHandle geometry,
+			Rml::Vector2f translation,
+			Rml::TextureHandle texture
+		) override;
+		void ReleaseShader(Rml::CompiledShaderHandle shader) override;
+	};
 
-	void EnableScissorRegion(bool enable) override;
-	void SetScissorRegion(Rml::Rectanglei region) override;
-
-	void SetTransform(const Rml::Matrix4f* transform) override;
-
-	void EnableClipMask(bool enable) override;
-	void RenderToClipMask(
-		Rml::ClipMaskOperation operation,
-		Rml::CompiledGeometryHandle geometry,
-		Rml::Vector2f translation
-	) override;
-
-	Rml::LayerHandle PushLayer() override;
-	void CompositeLayers(
-		Rml::LayerHandle source,
-		Rml::LayerHandle destination,
-		Rml::BlendMode blend_mode,
-		Rml::Span<const Rml::CompiledFilterHandle> filters
-	) override;
-	void PopLayer() override;
-
-	Rml::CompiledFilterHandle CompileFilter(
-		const Rml::String& name,
-		const Rml::Dictionary& parameters
-	) override;
-	void ReleaseFilter(Rml::CompiledFilterHandle filter) override;
-
-	Rml::TextureHandle SaveLayerAsTexture() override;
-	Rml::CompiledFilterHandle SaveLayerAsMaskImage() override;
-
-	Rml::CompiledShaderHandle CompileShader(
-		const Rml::String& name,
-		const Rml::Dictionary& parameters
-	) override;
-	void RenderShader(
-		Rml::CompiledShaderHandle shader,
-		Rml::CompiledGeometryHandle geometry,
-		Rml::Vector2f translation,
-		Rml::TextureHandle texture
-	) override;
-	void ReleaseShader(Rml::CompiledShaderHandle shader) override;
-};
-
-}
+} // namespace nimble::RmlOgre
 
 #endif // NIMBLE_RMLOGRE_RENDERINTERFACE_HPP

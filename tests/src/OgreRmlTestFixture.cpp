@@ -3,6 +3,7 @@
 
 #include <OgreAbiUtils.h>
 #include <OgreArchiveManager.h>
+#include <OgreCamera.h>
 #include <OgreHlmsManager.h>
 #include <OgreHlmsUnlit.h>
 #include <OgreRenderSystem.h>
@@ -13,17 +14,19 @@
 #include <OgreWindow.h>
 
 #include <Compositor/OgreCompositorManager2.h>
+#include <Compositor/OgreCompositorNodeDef.h>
+#include <Compositor/OgreCompositorWorkspace.h>
+#include <Compositor/OgreCompositorWorkspaceDef.h>
 #include <Compositor/Pass/OgreCompositorPassProvider.h>
+#include <Compositor/Pass/PassClear/OgreCompositorPassClearDef.h>
 
 #if RML_TEST_STATIC_OGRE
 #	include <RenderSystems/Vulkan/OgreVulkanPlugin.h>
 #endif
 
 #include <RmlUi/Core.h>
-#include <RmlOgre/Compositor/CompositorPassGeometry.hpp>
-#include <RmlOgre/Compositor/CompositorPassGeometryDef.hpp>
-#include <RmlOgre/Compositor/CompositorPassRenderQuad.hpp>
-#include <RmlOgre/Compositor/CompositorPassRenderQuadDef.hpp>
+#include <RmlOgre/Compositor/CompositorPassRml.hpp>
+#include <RmlOgre/Compositor/CompositorPassRmlDef.hpp>
 #include <RmlOgre/RenderInterface.hpp>
 
 #include <stdexcept>
@@ -32,6 +35,7 @@
 namespace rml_tests {
 
 	namespace {
+
 		struct ScopedCurrentPath {
 			std::filesystem::path prev;
 
@@ -46,17 +50,16 @@ namespace rml_tests {
 				std::filesystem::current_path(prev, ec);
 			}
 		};
+
 		struct TestCompositorPassProvider final : public Ogre::CompositorPassProvider {
 			Ogre::CompositorPassDef* addPassDef(
 				Ogre::CompositorPassType /*passType*/,
 				Ogre::IdString customId,
 				Ogre::CompositorTargetDef* parentTargetDef,
-				Ogre::CompositorNodeDef* parentNodeDef) override
+				Ogre::CompositorNodeDef* /*parentNodeDef*/) override
 			{
-				if (customId == "rml/geometry")
-					return OGRE_NEW nimble::RmlOgre::CompositorPassGeometryDef(parentTargetDef);
-				if (customId == "rml/render_quad")
-					return OGRE_NEW nimble::RmlOgre::CompositorPassRenderQuadDef(parentNodeDef, parentTargetDef);
+				if (customId == "rml/render")
+					return OGRE_NEW nimble::RmlOgre::CompositorPassRmlDef(parentTargetDef);
 				return nullptr;
 			}
 
@@ -67,10 +70,8 @@ namespace rml_tests {
 				const Ogre::RenderTargetViewDef* rtvDef,
 				Ogre::SceneManager* /*sceneManager*/) override
 			{
-				if (auto* d = dynamic_cast<const nimble::RmlOgre::CompositorPassGeometryDef*>(definition))
-					return OGRE_NEW nimble::RmlOgre::CompositorPassGeometry(d, defaultCamera, rtvDef, parentNode);
-				if (auto* d = dynamic_cast<const nimble::RmlOgre::CompositorPassRenderQuadDef*>(definition))
-					return OGRE_NEW nimble::RmlOgre::CompositorPassRenderQuad(d, defaultCamera, parentNode, rtvDef);
+				if (auto* d = dynamic_cast<const nimble::RmlOgre::CompositorPassRmlDef*>(definition))
+					return OGRE_NEW nimble::RmlOgre::CompositorPassRml(d, defaultCamera, rtvDef, parentNode);
 
 				OGRE_EXCEPT(
 					Ogre::Exception::ERR_NOT_IMPLEMENTED,
@@ -83,13 +84,11 @@ namespace rml_tests {
 			const std::filesystem::path& hlmsRoot,
 			const Ogre::String& ogreRelPath)
 		{
-			// Вариант 1: media/hlms/Hlms/Unlit/Any
 			const auto withHlmsPrefix = hlmsRoot / ogreRelPath;
 			if (std::filesystem::exists(withHlmsPrefix)) {
 				return withHlmsPrefix;
 			}
 
-			// Вариант 2: media/hlms/Unlit/Any (папка Hlms скопирована как media/hlms)
 			constexpr std::string_view prefix = "Hlms/";
 			if (ogreRelPath.starts_with(prefix)) {
 				const auto withoutPrefix = hlmsRoot / ogreRelPath.substr(prefix.size());
@@ -148,7 +147,7 @@ namespace rml_tests {
 		}
 
 		void setup_resources(const std::filesystem::path& mediaDir) {
-			// 1. Common-ресурсы Ogre (Copyback.material, Quad.program и их GLSL-шейдеры для Vulkan)
+			// 1. Common-ресурсы Ogre (Quad.program, Copyback.material и GLSL-шейдеры)
 			const auto commonDir = mediaDir / "common";
 			if (!std::filesystem::exists(commonDir)) {
 				throw std::runtime_error("Common resources directory not found: " + commonDir.string());
@@ -156,25 +155,95 @@ namespace rml_tests {
 			add_dir_if_exists(commonDir);
 			add_dir_if_exists(commonDir / "Any");
 			add_dir_if_exists(commonDir / "GLSL");
-			//add_dir_if_exists(commonDir / "GLSLVK");
-			//add_dir_if_exists(commonDir / "Vulkan");
 
-			// 2. Скрипты композитора, материалы и шейдеры RmlOgre
-			const auto rmlCompositorsDir = mediaDir / "scripts" / "compositors" / "Rml";
+			// 2. Материалы и шейдеры RmlOgre (градиенты для test_10_shaders и др.)
+			// Старую папку scripts/compositors/Rml не подключаем — воркспейс собирается программно
 			const auto rmlMaterialsDir = mediaDir / "scripts" / "materials" / "Rml";
-			if (!std::filesystem::exists(rmlCompositorsDir)) {
-				throw std::runtime_error("Rml compositor directory not found: " + rmlCompositorsDir.string());
-			}
-
-			add_dir_if_exists(rmlCompositorsDir);
 			add_dir_if_exists(rmlMaterialsDir);
 			add_dir_if_exists(rmlMaterialsDir / "Any");
 			add_dir_if_exists(rmlMaterialsDir / "GLSL");
-			//add_dir_if_exists(rmlMaterialsDir / "GLSLVK");
 
 			// 3. Текстуры RmlUi тестов (checkerboard.png, invader.tga, star.png)
 			add_dir_if_exists(mediaDir / "rml");
 		}
+
+		/// RAII-обёртка над статическим 1-нодовым воркспейсом (clear + rml/render)
+		struct ScopedRmlTestWorkspace {
+			Ogre::CompositorManager2* compMgr = nullptr;
+			Ogre::SceneManager* sceneMgr = nullptr;
+			Ogre::Camera* camera = nullptr;
+			Ogre::CompositorWorkspace* workspace = nullptr;
+			Ogre::IdString wsDefName{};
+			Ogre::IdString nodeDefName{};
+
+			ScopedRmlTestWorkspace(
+				Ogre::CompositorManager2* cm,
+				Ogre::SceneManager* sm,
+				Ogre::TextureGpu* rtTexture,
+				const nimble::RmlOgre::RmlFrameData* frameData,
+				const std::string& prefix)
+				: compMgr(cm)
+				, sceneMgr(sm)
+			{
+				camera = sceneMgr->createCamera(prefix + "_Cam", false);
+
+				const std::string nodeStr = prefix + "_Node";
+				const std::string wsStr = prefix + "_Ws";
+				nodeDefName = Ogre::IdString(nodeStr);
+				wsDefName = Ogre::IdString(wsStr);
+
+				if (compMgr->hasNodeDefinition(nodeDefName))
+					compMgr->removeNodeDefinition(nodeDefName);
+				if (compMgr->hasWorkspaceDefinition(wsDefName))
+					compMgr->removeWorkspaceDefinition(wsDefName);
+
+				auto* nodeDef = compMgr->addNodeDefinition(nodeStr);
+				nodeDef->addTextureSourceName("rt_out", 0, Ogre::TextureDefinitionBase::TEXTURE_INPUT);
+
+				auto* depthTex = nodeDef->addTextureDefinition("rtd");
+				depthTex->textureType = Ogre::TextureTypes::Type2D;
+				depthTex->width = 0;
+				depthTex->height = 0;
+				depthTex->format = Ogre::PFG_D32_FLOAT_S8X24_UINT;
+
+				auto* rtv = nodeDef->addRenderTextureView("rtv_rml");
+				rtv->colourAttachments.emplace_back();
+				rtv->colourAttachments.back().textureName = "rt_out";
+				rtv->depthAttachment.textureName = "rtd";
+
+				nodeDef->setNumTargetPass(1);
+				auto* targetPass = nodeDef->addTargetPass("rtv_rml");
+				targetPass->setNumPasses(2);
+
+				auto* clearPass = static_cast<Ogre::CompositorPassClearDef*>(
+					targetPass->addPass(Ogre::PASS_CLEAR));
+				clearPass->mClearColour[0] = Ogre::ColourValue(0.0f, 0.0f, 0.0f, 1.0f);
+				clearPass->mClearStencil = 0u;
+
+				auto* rmlPass = static_cast<nimble::RmlOgre::CompositorPassRmlDef*>(
+					targetPass->addPass(Ogre::PASS_CUSTOM, Ogre::IdString("rml/render")));
+				rmlPass->mFrameData = frameData;
+
+				auto* wsDef = compMgr->addWorkspaceDefinition(wsStr);
+				wsDef->connectExternal(0, nodeDefName, 0);
+
+				workspace = compMgr->addWorkspace(sceneMgr, rtTexture, camera, wsDefName, true);
+			}
+
+			~ScopedRmlTestWorkspace() {
+				if (compMgr) {
+					if (workspace)
+						compMgr->removeWorkspace(workspace);
+					if (wsDefName != Ogre::IdString() && compMgr->hasWorkspaceDefinition(wsDefName))
+						compMgr->removeWorkspaceDefinition(wsDefName);
+					if (nodeDefName != Ogre::IdString() && compMgr->hasNodeDefinition(nodeDefName))
+						compMgr->removeNodeDefinition(nodeDefName);
+				}
+				if (sceneMgr && camera) {
+					sceneMgr->destroyCamera(camera);
+				}
+			}
+		};
 
 	} // namespace
 
@@ -186,7 +255,6 @@ namespace rml_tests {
 	{
 		const Ogre::AbiCookie abiCookie = Ogre::generateAbiCookie();
 
-		// Без plugins.cfg и ogre.cfg
 		_root.reset(OGRE_NEW Ogre::Root(&abiCookie, "", "", "./RmlOgreRenderTests.log"));
 
 #if RML_TEST_STATIC_OGRE
@@ -229,8 +297,7 @@ namespace rml_tests {
 		Rml::LoadFontFace((fontsDir / "LatoLatin-Regular.ttf").string());
 
 		_scene_mgr = _root->createSceneManager(Ogre::ST_GENERIC, 1u, "RmlTestSceneManager");
-		_render_interface = std::make_unique<nimble::RmlOgre::RenderInterface>(
-			"RmlTestUI", _scene_mgr, nullptr, nullptr);
+		_render_interface = std::make_unique<nimble::RmlOgre::RenderInterface>("RmlTestUI");
 
 		_instance = this;
 	}
@@ -238,15 +305,8 @@ namespace rml_tests {
 	OgreRmlTestFixture::~OgreRmlTestFixture() {
 		_instance = nullptr;
 
-		if (_render_interface) {
-			_render_interface->SetOutput(nullptr);
-		}
-
-		// Сначала освобождаем все RenderManager'ы и ставим VAO/текстуры в очередь на удаление
 		Rml::Shutdown();
 
-		// Сбрасываем releaseGeometries / releaseTextures пока Ogre::Root ещё жив,
-		// после чего уничтожаем RenderInterface (ассерт HasRenderManager уже не сработает)
 		if (_render_interface) {
 			_render_interface->BeginFrame();
 			_render_interface.reset();
@@ -289,20 +349,24 @@ namespace rml_tests {
 		rtTexture->scheduleTransitionTo(Ogre::GpuResidency::Resident);
 		texMgr->waitForStreamingCompletion();
 
-		_render_interface->SetOutput(rtTexture);
-
 		Rml::Context* context = Rml::CreateContext(
 			"Ctx_" + spec.name,
 			Rml::Vector2i(static_cast<int>(width), static_cast<int>(height)),
 			_render_interface.get());
 		if (!context) {
-			_render_interface->SetOutput(nullptr);
 			texMgr->destroyTexture(rtTexture);
 			throw std::runtime_error("Failed to create Rml::Context for " + spec.name);
 		}
 
 		ImageCompareResult result{};
 		try {
+			ScopedRmlTestWorkspace testWs(
+				_root->getCompositorManager2(),
+				_scene_mgr,
+				rtTexture,
+				&_render_interface->frameData(),
+				"RmlTest_" + spec.name);
+
 			ScopedCurrentPath cwdGuard(rmlDir);
 
 			Rml::ElementDocument* doc = context->LoadDocument(spec.rml_filename);
@@ -328,13 +392,11 @@ namespace rml_tests {
 		}
 		catch (...) {
 			Rml::RemoveContext(context->GetName());
-			_render_interface->SetOutput(nullptr);
 			texMgr->destroyTexture(rtTexture);
 			throw;
 		}
 
 		Rml::RemoveContext(context->GetName());
-		_render_interface->SetOutput(nullptr);
 		texMgr->destroyTexture(rtTexture);
 		return result;
 	}
