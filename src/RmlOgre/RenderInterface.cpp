@@ -75,8 +75,8 @@ RenderInterface::RenderInterface(Ogre::String name)
 				stencilBlendblock,
 				Ogre::HlmsParamVec()));
 	}
-	mFrameData.stencilMaterial = Material{ nullptr, stencilDatablock };
-	mFrameData.stencilMaterial.calculateHlmsHash();
+	mStencilMaterial = Material{ nullptr, stencilDatablock };
+	mStencilMaterial.calculateHlmsHash();
 
 	// Фильтры (индекс 0 зарезервирован под пустой handle)
 	AddFilterMaker("blur", std::make_unique<BlurFilterMaker>());
@@ -205,12 +205,18 @@ void RenderInterface::AddShaderMaker(Rml::String name, std::unique_ptr<ShaderMak
 	mShaderMakers.emplace(std::move(name), std::move(shaderMaker));
 }
 
-void RenderInterface::BeginFrame()
+void RenderInterface::FlushReleases()
 {
-	mFrameData.clear();
-
 	releaseBufferedGeometries();
 	releaseBufferedTextures();
+}
+
+void RenderInterface::BeginFrame(RmlFrameData& targetFrame, Rml::Vector2i viewportSize)
+{
+	mViewportSize = viewportSize;
+	mActiveFrameData = &targetFrame;
+	mActiveFrameData->clear();
+	mActiveFrameData->stencilMaterial = mStencilMaterial;
 
 	mCurrentScissor = {};
 	mCurrentTransform = Ogre::Matrix4::IDENTITY;
@@ -219,9 +225,16 @@ void RenderInterface::BeginFrame()
 	mLayerDepth = 1;
 }
 
+void RenderInterface::BeginFrame()
+{
+	mDefaultFrameData.clear();
+	FlushReleases();
+	BeginFrame(mDefaultFrameData, mViewportSize);
+}
+
 void RenderInterface::EndFrame()
 {
-	// Все команды записаны в mFrameData; CompositorPassRml исполнит их синхронно.
+	mActiveFrameData = nullptr;
 }
 
 Rml::CompiledGeometryHandle RenderInterface::CompileGeometry(
@@ -236,11 +249,13 @@ void RenderInterface::RenderGeometry(
 	Rml::Vector2f translation,
 	Rml::TextureHandle texture)
 {
+	assert(mActiveFrameData);
+
 	auto& material = mMaterials.at(texture);
 	if (material.needsHashing())
 		material.calculateHlmsHash();
 
-	mFrameData.commands.push_back(DrawCmd{
+	mActiveFrameData->commands.push_back(DrawCmd{
 		.vao = reinterpret_cast<Ogre::VertexArrayObject*>(geometry),
 		.material = material,
 		.transform = mCurrentTransform,
@@ -251,7 +266,7 @@ void RenderInterface::RenderGeometry(
 		});
 
 	if (material.textureDependency)
-		mFrameData.textureDependencies.push_back(material.textureDependency);
+		mActiveFrameData->textureDependencies.push_back(material.textureDependency);
 }
 
 void RenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle geometry)
@@ -385,16 +400,18 @@ void RenderInterface::RenderToClipMask(
 	Rml::CompiledGeometryHandle geometry,
 	Rml::Vector2f translation)
 {
+	assert(mActiveFrameData);
+
 	auto* vao = reinterpret_cast<Ogre::VertexArrayObject*>(geometry);
 
 	switch (operation)
 	{
 	case Rml::ClipMaskOperation::Set:
 		mStencilRef = 1u;
-		mFrameData.commands.push_back(ClearStencilCmd{ 0u });
-		mFrameData.commands.push_back(DrawCmd{
+		mActiveFrameData->commands.push_back(ClearStencilCmd{ 0u });
+		mActiveFrameData->commands.push_back(DrawCmd{
 			.vao = vao,
-			.material = mFrameData.stencilMaterial,
+			.material = mStencilMaterial,
 			.transform = mCurrentTransform,
 			.translation = translation,
 			.scissor = mCurrentScissor,
@@ -404,10 +421,10 @@ void RenderInterface::RenderToClipMask(
 		break;
 
 	case Rml::ClipMaskOperation::SetInverse:
-		mFrameData.commands.push_back(ClearStencilCmd{ 1u });
-		mFrameData.commands.push_back(DrawCmd{
+		mActiveFrameData->commands.push_back(ClearStencilCmd{ 1u });
+		mActiveFrameData->commands.push_back(DrawCmd{
 			.vao = vao,
-			.material = mFrameData.stencilMaterial,
+			.material = mStencilMaterial,
 			.transform = mCurrentTransform,
 			.translation = translation,
 			.scissor = mCurrentScissor,
@@ -419,9 +436,9 @@ void RenderInterface::RenderToClipMask(
 
 	case Rml::ClipMaskOperation::Intersect:
 		++mStencilRef;
-		mFrameData.commands.push_back(DrawCmd{
+		mActiveFrameData->commands.push_back(DrawCmd{
 			.vao = vao,
-			.material = mFrameData.stencilMaterial,
+			.material = mStencilMaterial,
 			.transform = mCurrentTransform,
 			.translation = translation,
 			.scissor = mCurrentScissor,
@@ -434,8 +451,10 @@ void RenderInterface::RenderToClipMask(
 
 Rml::LayerHandle RenderInterface::PushLayer()
 {
+	assert(mActiveFrameData);
+
 	const std::uint32_t newLayerId = mLayerDepth++;
-	mFrameData.commands.push_back(PushLayerCmd{ newLayerId });
+	mActiveFrameData->commands.push_back(PushLayerCmd{ newLayerId });
 	return static_cast<Rml::LayerHandle>(newLayerId);
 }
 
@@ -445,6 +464,8 @@ void RenderInterface::CompositeLayers(
 	Rml::BlendMode blend_mode,
 	Rml::Span<const Rml::CompiledFilterHandle> filters)
 {
+	assert(mActiveFrameData);
+
 	CompositeLayersCmd cmd{};
 	cmd.sourceLayer = static_cast<std::uint32_t>(source);
 	cmd.destinationLayer = static_cast<std::uint32_t>(destination);
@@ -460,15 +481,17 @@ void RenderInterface::CompositeLayers(
 			mFilters[filterHandle]->appendSteps(cmd.filters);
 	}
 
-	mFrameData.commands.push_back(std::move(cmd));
+	mActiveFrameData->commands.push_back(std::move(cmd));
 }
 
 void RenderInterface::PopLayer()
 {
+	assert(mActiveFrameData);
+
 	if (mLayerDepth > 1)
 	{
 		--mLayerDepth;
-		mFrameData.commands.push_back(PopLayerCmd{ activeLayer() });
+		mActiveFrameData->commands.push_back(PopLayerCmd{ activeLayer() });
 	}
 }
 
@@ -499,6 +522,8 @@ void RenderInterface::ReleaseFilter(Rml::CompiledFilterHandle filter)
 
 Rml::TextureHandle RenderInterface::SaveLayerAsTexture()
 {
+	assert(mActiveFrameData);
+
 	Rml::Vector2i dimensions{};
 	Ogre::TextureGpu* texture = createSaveLayerTexture(dimensions);
 
@@ -510,7 +535,7 @@ Rml::TextureHandle RenderInterface::SaveLayerAsTexture()
 	datablock->setTexture(0, texture);
 	datablock->setUseColour(true);
 
-	mFrameData.commands.push_back(SaveLayerCmd{
+	mActiveFrameData->commands.push_back(SaveLayerCmd{
 		.sourceLayer = activeLayer(),
 		.dstTexture = texture,
 		.scissor = mCurrentScissor
@@ -523,10 +548,12 @@ Rml::TextureHandle RenderInterface::SaveLayerAsTexture()
 
 Rml::CompiledFilterHandle RenderInterface::SaveLayerAsMaskImage()
 {
+	assert(mActiveFrameData);
+
 	Rml::Vector2i dimensions{};
 	Ogre::TextureGpu* texture = createSaveLayerTexture(dimensions);
 
-	mFrameData.commands.push_back(SaveLayerCmd{
+	mActiveFrameData->commands.push_back(SaveLayerCmd{
 		.sourceLayer = activeLayer(),
 		.dstTexture = texture,
 		.scissor = mCurrentScissor
@@ -560,11 +587,13 @@ void RenderInterface::RenderShader(
 	Rml::Vector2f translation,
 	Rml::TextureHandle /*texture*/)
 {
+	assert(mActiveFrameData);
+
 	auto& material = mShaders.at(shader);
 	if (material.needsHashing())
 		material.calculateHlmsHash();
 
-	mFrameData.commands.push_back(DrawCmd{
+	mActiveFrameData->commands.push_back(DrawCmd{
 		.vao = reinterpret_cast<Ogre::VertexArrayObject*>(geometry),
 		.material = material,
 		.transform = mCurrentTransform,

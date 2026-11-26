@@ -1,0 +1,69 @@
+/**
+ * @mainpage RmlOgre — синхронный бэкенд RmlUi для Ogre-Next 4.0 (Vulkan)
+ *
+ * @section arch_overview Общий граф вызовов за один кадр
+ *
+ * Архитектура строго разделена на две фазы, связанные через плоские буферы
+ * команд @ref nimble::RmlOgre::RmlFrameData (без перестройки CompositorWorkspace).
+ * Один экземпляр @ref nimble::RmlOgre::RenderInterface обслуживает любое число
+ * поверхностей (`UiSurface`), разделяя между ними шрифты, текстуры, шейдеры и фильтры.
+ *
+ * @code
+ * [Фаза 1: Запись команд на CPU — код приложения + RmlUi]
+ *   // 1. Один раз в начале кадра (после освобождения устаревших RmlFrameData):
+ *   Host: RenderInterface::FlushReleases()
+ *         ├─ releaseBufferedGeometries()     // уничтожает отложенные VAO
+ *         └─ releaseBufferedTextures()       // уничтожает отложенные TextureGpu/Datablock
+ *
+ *   // 2. Для каждой активной поверхности UiSurface (со своим RmlFrameData):
+ *   Host: surface.context->Update()
+ *   Host: RenderInterface::BeginFrame(surface.frameData, surface.size)
+ *         ├─ targetFrame.clear()             // снимает MaterialPtr прошлого кадра
+ *         ├─ targetFrame.stencilMaterial = mStencilMaterial
+ *         └─ сброс scissor / transform / stencil / layerDepth
+ *   Host: surface.context->Render()
+ *         ├─ RenderInterface::EnableScissorRegion() / SetScissorRegion()
+ *         ├─ RenderInterface::SetTransform()
+ *         ├─ RenderInterface::EnableClipMask() / RenderToClipMask() -> ClearStencilCmd, DrawCmd
+ *         ├─ RenderInterface::RenderGeometry() / RenderShader()     -> DrawCmd
+ *         ├─ RenderInterface::PushLayer() / PopLayer()              -> PushLayerCmd, PopLayerCmd
+ *         ├─ RenderInterface::CompositeLayers()                     -> CompositeLayersCmd (FilterStep[])
+ *         └─ RenderInterface::SaveLayerAsTexture() / MaskImage()    -> SaveLayerCmd
+ *   Host: RenderInterface::EndFrame()        // mActiveFrameData = nullptr
+ *
+ *   // (Для тестов / одиночной поверхности доступна сокращённая перегрузка
+ *   //  RenderInterface::BeginFrame(), вызывающая FlushReleases() + запись в mDefaultFrameData)
+ *
+ * [Фаза 2: Исполнение на GPU — внутри Ogre::Root::renderOneFrame()]
+ *   Ogre::CompositorWorkspace::_update()     // для каждого View / UiSurface
+ *     └─ Ogre::CompositorNode::_update()
+ *          └─ CompositorPassRml::execute()
+ *               ├─ analyzeBarriers() / executeResourceTransitions()
+ *               └─ Цикл по mFrameData->commands:
+ *                    ├─ ClearStencilCmd    -> executeClearStencil() -> flushBatch()
+ *                    ├─ DrawCmd (батч)     -> can_batch_draws()     -> flushBatch()
+ *                    ├─ PushLayerCmd       -> handlePushLayer()     -> ensureLayerSlot()
+ *                    ├─ PopLayerCmd        -> handlePopLayer()
+ *                    ├─ CompositeLayersCmd -> handleCompositeLayers()
+ *                    │                        ├─ drawScratchQuad()  -> drawFullscreenQuad()
+ *                    │                        └─ applyBlurPass()    -> drawScratchQuad()
+ *                    └─ SaveLayerCmd       -> handleSaveLayer()     -> getOrCreateSaveRpd()
+ * @endcode
+ *
+ * @section lifecycle_rules Правила владения и порядка уничтожения
+ * 1. **Динамическое удаление одного `UiSurface` (без `Rml::Shutdown()`):**
+ *    - Отвязать буфер от пасса (`CompositorPassRml::setFrameData(nullptr)`) или удалить `CompositorWorkspace` поверхности.
+ *    - Вызвать `surface.frameData.clear()`, чтобы отпустить все `Ogre::MaterialPtr` (включая маски).
+ *    - Вызвать `Rml::RemoveContext(...)` — освобождённые VAO и текстуры уйдут в очередь общего `RenderInterface`
+ *      и будут безопасно удалены на следующем кадре в `RenderInterface::FlushReleases()`.
+ * 2. **Завершение работы движка:**
+ *    - Очистить все активные `RmlFrameData` и удалить воркспейсы с `CompositorPassRml`.
+ *    - Вызвать `Rml::Shutdown()`, затем один раз `RenderInterface::FlushReleases()` (пока жив `Ogre::Root`),
+ *      и только после этого уничтожать `RenderInterface` и `Ogre::Root`.
+ * 3. **Время жизни буфера команд:**
+ *    - @ref nimble::RmlOgre::CompositorPassRml не владеет @ref nimble::RmlOgre::RmlFrameData.
+ *      Владелец буфера (`UiSurface` или `RenderInterface` в режиме `mDefaultFrameData`) обязан жить дольше
+ *      привязанного `CompositorWorkspace` либо сбрасывать указатель через `setFrameData(nullptr)`.
+ *    - Перед вызовом `RenderInterface::FlushReleases()` не должно оставаться `RmlFrameData` прошлых кадров,
+ *      удерживающих `Ogre::MaterialPtr` с удаляемыми текстурами (например, масками `Rml/Mask`).
+ */
