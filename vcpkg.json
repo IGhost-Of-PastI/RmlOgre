@@ -19,6 +19,7 @@
       ]
     },
     "vulkan",
-    "vulkan-validationlayers"
+    "vulkan-validationlayers",
+    "boost-gil"
   ]
 }

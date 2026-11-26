@@ -10,7 +10,7 @@ include(GNUInstallDirs)
 #list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 find_package(ogre-next CONFIG REQUIRED)
-find_package(RmlUi REQUIRED)
+find_package(RmlUi REQUIRED REQUIRED)
 
 
 add_library(RmlOgre)
@@ -77,6 +77,7 @@ set_target_properties(RmlOgre
 if(BUILD_EXAMPLE)
 	add_subdirectory("example")
 endif()
+include(CTest)
 if(BUILD_TESTS)
 	add_subdirectory("tests")
 endif()

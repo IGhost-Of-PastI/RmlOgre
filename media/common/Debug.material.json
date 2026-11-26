@@ -1,0 +1,32 @@
+{
+	"macroblocks" : 
+	{
+		"debug_macro":
+		{
+             "depth_check" : false,
+             "cull_mode" : "none",
+             "polygon_mode" : "wireframe"
+		},
+		"debug_icon_macro":
+		{
+			"cull_mode" : "none"
+		}
+	},
+	"unlit":
+	{
+		"debug_material":
+		{
+			"macroblock":"debug_macro"
+		},
+		"debug_icon":
+		{
+			"macroblock":"debug_icon_macro",
+			"alpha_test" : ["greater_equal",0.0,false],
+			"diffuse_map0":
+			{
+				"blendmode" : "NoramlNonPremul",
+				"sampler":"standart_ui_sampler"
+			}
+		}
+	}
+}

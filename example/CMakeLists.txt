@@ -36,33 +36,3 @@ target_link_libraries(RmlOgreExample
 )
 
 target_compile_definitions(RmlOgreExample PRIVATE RMLOGRE_MEDIA_DIR=${RMLOGRE_MEDIA_DIR})
-
-if(CMAKE_CONFIGURATION_TYPES)
-	foreach(BUILD_TYPE ${CMAKE_CONFIGURATION_TYPES})
-		message( STATUS "Copying DLLs and generating plugins.cfg for ${BUILD_TYPE}" )
-		setupPluginFileFromTemplate(
-			${OGRE-Next_DIR}
-			${PROJECT_SOURCE_DIR}/cmake/templates/plugins.cfg.in
-			${CMAKE_CURRENT_BINARY_DIR}/${BUILD_TYPE}
-			${BUILD_TYPE}
-			false
-			false )
-
-		configure_file(
-			${PROJECT_SOURCE_DIR}/cmake/templates/resources.cfg.in
-			${CMAKE_CURRENT_BINARY_DIR}/${BUILD_TYPE}/resources.cfg )
-	endforeach()
-else()
-	message( STATUS "Copying DLLs and generating plugins.cfg for ${CMAKE_BUILD_TYPE}" )
-	setupPluginFileFromTemplate(
-		${OGRE-Next_DIR}
-		${PROJECT_SOURCE_DIR}/cmake/templates/plugins.cfg.in
-		${CMAKE_CURRENT_BINARY_DIR}
-		${CMAKE_BUILD_TYPE}
-		false
-		false )
-
-	configure_file(
-		${PROJECT_SOURCE_DIR}/cmake/templates/resources.cfg.in
-		${CMAKE_CURRENT_BINARY_DIR}/resources.cfg )
-endif()
